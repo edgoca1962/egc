@@ -1,0 +1,15 @@
+/*
+Theme Name: Sistema Framework de Gestión (EGC)
+Theme URI: fgh-org.org 
+Text Domain: egc
+Author: Edwin González 
+Author URI: https: //fgh-org.org
+Description: Este tema pretende ser un framework para poder implementar diferentes módulos o necesidades de un cliente. Cada módulo podría estar compuesto por uno o varios Custom Posts, páginas, sidebars, menues, etc. En este framework se incluye bootstrap, sweetalert, fontawesome, annimate entre otas dependencias que se pueden ver en el package.json file. 
+Version: 0.1.0
+Tested up to: 5.4 
+Requires PHP up to: 8.0 
+License: GNU General Public License v1 or later 
+License URI: LICENSE 
+Tags: dynamic, custom-background, custom-logo, custom-menu, featured-images, threaded-comments, translation-ready This theme, like WordPress,is licensed under the GPL. Use it to make something cool, have fun, and share what you've learned.
+
+*/

@@ -1,0 +1,13 @@
+{
+    "name": "egc/theme",
+    "description": "Núcleo del framework modular EGC sobre WordPress",
+    "type": "wordpress-theme",
+    "autoload": {
+        "psr-4": {
+            "EGC\\Core\\": "core/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}
