@@ -22,6 +22,9 @@ class Core
 
     private function __construct()
     {
-        // Intencionalmente vacío por ahora.
+        Setup::get_instance();
+        AdminGuard::get_instance();
+        Assets::get_instance();
+        RoleSync::get_instance();
     }
 }

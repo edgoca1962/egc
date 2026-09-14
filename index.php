@@ -1,13 +1,28 @@
 <?php
-/**
- * Único archivo de marcado del tema.
- *
- * No hay header.php ni footer.php: el <head>, el <body>, el navbar y
- * el banner se resuelven aquí mismo, llamando directamente a los
- * servicios del Core. Al no existir single.php, archive.php, page.php
- * ni front-page.php en este tema, WordPress cae siempre en index.php
- * para cualquier tipo de contenido —comportamiento nativo de la
- * jerarquía de plantillas, sin filtros de por medio—.
- */
 
-defined('ABSPATH') || exit;
+use EGC\Core\ViewResolver;
+
+if (!defined('ABSPATH')) {
+    exit; // Exit if accessed directly.
+}
+
+?><!DOCTYPE html>
+<html <?php language_attributes(); ?> data-bs-theme="dark">
+
+<head>
+    <meta charset="<?php bloginfo('charset'); ?>">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <?php wp_head(); ?>
+</head>
+
+<body <?php body_class(); ?>>
+    <?php wp_body_open(); ?>
+
+    <main>
+        <?php get_template_part(ViewResolver::get_instance()->resolve()); ?>
+    </main>
+
+    <?php wp_footer(); ?>
+</body>
+
+</html>
