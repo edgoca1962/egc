@@ -8,21 +8,23 @@ if (!defined('ABSPATH')) {
 
 ?><!DOCTYPE html>
 <html <?php language_attributes(); ?> data-bs-theme="dark">
-
 <head>
     <meta charset="<?php bloginfo('charset'); ?>">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <?php wp_head(); ?>
 </head>
-
 <body <?php body_class(); ?>>
-    <?php wp_body_open(); ?>
+<?php wp_body_open(); ?>
 
-    <main>
-        <?php get_template_part(ViewResolver::get_instance()->resolve()); ?>
-    </main>
+<header>
+    <?php get_template_part('core/views/navbar'); ?>
+    <?php get_template_part('core/views/banner'); ?>
+</header>
 
-    <?php wp_footer(); ?>
+<main>
+    <?php get_template_part(ViewResolver::get_instance()->resolve()); ?>
+</main>
+
+<?php wp_footer(); ?>
 </body>
-
 </html>

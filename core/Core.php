@@ -10,11 +10,10 @@ if (!defined('ABSPATH')) {
  * Orquestador del Core.
  *
  * Punto único de arranque del tema, instanciado desde `functions.php`
- * en `after_setup_theme`. Por ahora no coordina nada: los pasos
- * siguientes (configuración de WordPress, guard de administración,
- * assets, module loader, role sync, resolver de vistas) se van a ir
- * agregando acá, cada uno delegado a su propia clase — nunca como
- * lógica propia de Core.
+ * en `after_setup_theme`. No coordina lógica propia: solo instancia
+ * los servicios que necesitan colgarse de un hook (los pasivos —
+ * ModuleLoader, ViewResolver, Pages, UserScope, MenuResolver,
+ * Banner — se consultan bajo demanda y no aparecen acá).
  */
 class Core
 {
@@ -26,5 +25,18 @@ class Core
         AdminGuard::get_instance();
         Assets::get_instance();
         RoleSync::get_instance();
+
+        // Fase 2 — usuarios, acceso y navegación.
+        UserStatus::get_instance();
+        AdminGeneralRole::get_instance();
+        LoginGuard::get_instance();
+        ActivationNotice::get_instance();
+        PasswordReset::get_instance();
+        LoginPage::get_instance();
+        UserRegistration::get_instance();
+        UserManagement::get_instance();
+        Account::get_instance();
+        PasswordChange::get_instance();
+        Menus::get_instance();
     }
 }
