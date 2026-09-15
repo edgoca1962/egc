@@ -20,7 +20,8 @@ $state = Account::get_instance()->view_state();
     <?php endif; ?>
 
     <div class="text-center mb-4">
-        <img src="<?php echo esc_url($state['avatar_url']); ?>" alt="" class="rounded-circle" width="96" height="96">
+        <img src="<?php echo esc_url($state['avatar_url']); ?>" alt="" id="avatar-preview"
+             class="rounded-circle" width="96" height="96" style="object-fit:cover;">
     </div>
 
     <form method="post" action="<?php echo esc_url($state['form_action']); ?>" enctype="multipart/form-data">

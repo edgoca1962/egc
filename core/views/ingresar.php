@@ -9,9 +9,8 @@ if (!defined('ABSPATH')) {
 $state = LoginPage::get_instance()->view_state();
 ?>
 <div class="container py-5" style="max-width: 480px;">
-    <h1 class="h3 mb-4"><?php esc_html_e('Ingresar', 'egc'); ?></h1>
 
-    <?php if ($state['error']) : ?>
+    <?php if ($state['error']): ?>
         <div class="alert alert-danger"><?php echo esc_html($state['error']); ?></div>
     <?php endif; ?>
 

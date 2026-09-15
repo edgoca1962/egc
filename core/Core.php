@@ -25,8 +25,6 @@ class Core
         AdminGuard::get_instance();
         Assets::get_instance();
         RoleSync::get_instance();
-
-        // Fase 2 — usuarios, acceso y navegación.
         UserStatus::get_instance();
         AdminGeneralRole::get_instance();
         LoginGuard::get_instance();

@@ -9,17 +9,16 @@ if (!defined('ABSPATH')) {
 $state = UserRegistration::get_instance()->view_state();
 ?>
 <div class="container py-5" style="max-width: 480px;">
-    <h1 class="h3 mb-4"><?php esc_html_e('Solicitar ingreso', 'egc'); ?></h1>
 
-    <?php if ($state['success']) : ?>
+    <?php if ($state['success']): ?>
         <div class="alert alert-success">
             <?php esc_html_e('Tu solicitud fue recibida. Te avisaremos por correo cuando esté activa.', 'egc'); ?>
         </div>
         <a class="btn btn-primary" href="<?php echo esc_url($state['login_url']); ?>">
             <?php esc_html_e('Volver a ingresar', 'egc'); ?>
         </a>
-    <?php else : ?>
-        <?php if ($state['error']) : ?>
+    <?php else: ?>
+        <?php if ($state['error']): ?>
             <div class="alert alert-danger"><?php echo esc_html($state['error']); ?></div>
         <?php endif; ?>
 

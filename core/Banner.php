@@ -7,12 +7,18 @@ if (!defined('ABSPATH')) {
 }
 
 /**
- * Atributos del banner de cabecera. El Core solo pone un default
- * genérico (nombre y descripción del sitio); cualquier módulo o
- * página puede cambiarlo colgándose del filtro egc_banner_atributos
- * sin que el Core tenga que conocer a ese módulo — así "cambia según
- * la página/módulo actual" sin una tabla de reglas propia que
- * mantener acá.
+ * Atributos del banner de cabecera. El Core solo pone un default; los
+ * pasos siguientes son:
+ * - Página de un módulo (su post_type está en el `post_types` de un
+ *   manifest): título = nombre del módulo (`nombre` del manifest),
+ *   subtítulo = título de esa página.
+ * - Página propia del Core (post_type = 'page'): título = título de
+ *   la página, sin subtítulo.
+ * - Portada / archivos (no es singular): título = nombre del sitio,
+ *   subtítulo = su descripción.
+ *
+ * Cualquier módulo o página puede seguir pisando esto con el filtro
+ * egc_banner_atributos, sin que el Core tenga que conocerlo.
  */
 class Banner
 {
@@ -28,19 +34,61 @@ class Banner
      */
     public function attributes()
     {
+        $module = $this->current_module();
+
         $default = [
-            'title'    => get_bloginfo('name'),
-            'subtitle' => get_bloginfo('description'),
-            'image'    => $this->generic_image_url(),
+            'title' => $this->default_title($module),
+            'subtitle' => $this->default_subtitle($module),
+            'image' => $this->generic_image_url(),
         ];
 
         return apply_filters('egc_banner_atributos', $default);
     }
 
+    private function default_title($module)
+    {
+        if ($module) {
+            return $module['nombre'] ?? '';
+        }
+
+        return is_singular() ? get_the_title() : get_bloginfo('name');
+    }
+
+    private function default_subtitle($module)
+    {
+        if ($module) {
+            return get_the_title();
+        }
+
+        return is_singular() ? '' : get_bloginfo('description');
+    }
+
+    /**
+     * @return array|null El manifest del módulo dueño del post_type
+     *                     actual, o null si no es una página de módulo
+     *                     (portada, archivo, o página propia del Core).
+     */
+    private function current_module()
+    {
+        if (!is_singular()) {
+            return null;
+        }
+
+        $post_type = get_post_type();
+
+        foreach (ModuleLoader::get_instance()->discover() as $manifest) {
+            if (isset($manifest['post_types']) && in_array($post_type, (array) $manifest['post_types'], true)) {
+                return $manifest;
+            }
+        }
+
+        return null;
+    }
+
     private function generic_image_url()
     {
-        $path = EGC_DIR . '/assets/img/banner-generico.jpg';
+        $path = EGC_DIR . '/assets/img/core/banner.jpg';
 
-        return file_exists($path) ? EGC_URL . '/assets/img/banner-generico.jpg' : '';
+        return file_exists($path) ? EGC_URL . '/assets/img/core/banner.jpg' : '';
     }
 }

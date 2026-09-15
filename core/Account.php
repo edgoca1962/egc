@@ -211,12 +211,18 @@ class Account
         return false;
     }
 
-    private function generic_avatar_url()
+    /**
+     * Pública porque la navbar también la necesita: sin sesión no hay
+     * usuario del que pedir get_avatar_url(), así que muestra
+     * directamente esta misma imagen de respaldo en vez de reimplementar
+     * la búsqueda del archivo en otro lado.
+     */
+    public function generic_avatar_url()
     {
-        $path = EGC_DIR . '/assets/img/avatar-generico.png';
+        $path = EGC_DIR . '/assets/img/core/wpfrwusr.png';
 
         if (file_exists($path)) {
-            return EGC_URL . '/assets/img/avatar-generico.png';
+            return EGC_URL . '/assets/img/core/wpfrwusr.png';
         }
 
         return 'data:image/svg+xml;base64,' . base64_encode(

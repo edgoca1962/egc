@@ -5,7 +5,9 @@ use EGC\Core\BootstrapNavWalker;
 use EGC\Core\LoginPage;
 use EGC\Core\MenuResolver;
 use EGC\Core\PasswordChange;
+use EGC\Core\UserManagement;
 use EGC\Core\UserRegistration;
+use EGC\Core\UserScope;
 
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
@@ -19,10 +21,19 @@ if (!defined('ABSPATH')) {
  */
 $location = MenuResolver::get_instance()->location();
 ?>
-<nav class="navbar navbar-expand-lg bg-body-tertiary">
+<nav class="navbar navbar-expand-lg bg-transparent fixed-top">
     <div class="container-fluid">
         <a class="navbar-brand" href="<?php echo esc_url(home_url('/')); ?>">
-            <?php bloginfo('name'); ?>
+            <?php if (has_custom_logo()) :
+                echo wp_get_attachment_image(get_theme_mod('custom_logo'), 'full', false, [
+                    'id'    => 'site-logo',
+                    'width' => 28,
+                    'height' => 28,
+                    'style' => 'width:28px;height:28px;object-fit:contain;',
+                ]);
+            else :
+                bloginfo('name');
+            endif; ?>
         </a>
 
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
@@ -49,7 +60,7 @@ $location = MenuResolver::get_instance()->location();
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button"
                            data-bs-toggle="dropdown" aria-expanded="false">
                             <img src="<?php echo esc_url(get_avatar_url(get_current_user_id())); ?>" alt=""
-                                 width="28" height="28" class="rounded-circle">
+                                 width="28" height="28" class="rounded-circle border border-2" style="object-fit:cover;">
                         </a>
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li>
@@ -62,6 +73,13 @@ $location = MenuResolver::get_instance()->location();
                                     <?php esc_html_e('Cambio contraseña', 'egc'); ?>
                                 </a>
                             </li>
+                            <?php if (UserScope::get_instance()->is_general_admin() || !empty(UserScope::get_instance()->managed_post_types())) : ?>
+                                <li>
+                                    <a class="dropdown-item" href="<?php echo esc_url(UserManagement::get_instance()->url()); ?>">
+                                        <?php esc_html_e('Gestión de usuarios', 'egc'); ?>
+                                    </a>
+                                </li>
+                            <?php endif; ?>
                             <li>
                                 <hr class="dropdown-divider">
                             </li>
@@ -74,10 +92,8 @@ $location = MenuResolver::get_instance()->location();
                     <?php else : ?>
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button"
                            data-bs-toggle="dropdown" aria-expanded="false">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor"
-                                 viewBox="0 0 16 16" aria-hidden="true">
-                                <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm2-3a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm4 8c0 1-1 1-1 1H3s-1 0-1-1 1-4 6-4 6 3 6 4Zm-1-.004c-.001-.246-.154-.986-.832-1.664C11.516 10.68 10.289 10 8 10c-2.29 0-3.516.68-4.168 1.332-.678.678-.83 1.418-.832 1.664h10Z"/>
-                            </svg>
+                            <img src="<?php echo esc_url(Account::get_instance()->generic_avatar_url()); ?>" alt=""
+                                 width="28" height="28" class="rounded-circle border border-2" style="object-fit:cover;">
                         </a>
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li>
