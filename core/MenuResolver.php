@@ -7,12 +7,15 @@ if (!defined('ABSPATH')) {
 }
 
 /**
- * Qué ubicación de menú (de las que declara Menus) le corresponde al
- * usuario actual. Administrador general y administrador de módulo son
- * mutuamente excluyentes por diseño: es un if/elseif que devuelve la
- * primera que aplica, y is_general_admin() se resuelve antes que
- * "administra algún módulo" — el superusuario, que siempre es
- * Administrador General, nunca cae en el menú de módulo.
+ * Qué ubicaciones de menú (de las que declara Menus) le corresponden al
+ * usuario actual, en el orden en que deben mostrarse.
+ *
+ * "Público" lo ve siempre cualquiera, esté o no logueado — incluido el
+ * superusuario. A eso se le agrega, como máximo, una ubicación de
+ * administración: general y de módulo siguen siendo mutuamente
+ * excluyentes entre sí (is_general_admin() se resuelve primero, el
+ * superusuario nunca cae en la de módulo), pero ninguna reemplaza a
+ * "Público" — se agrega junto a ella.
  *
  * Servicio pasivo: la vista de la navbar lo consulta bajo demanda.
  */
@@ -25,24 +28,27 @@ class MenuResolver
         // Sin hooks propios: se consulta bajo demanda desde el partial de navbar.
     }
 
-    public function location()
+    /**
+     * @return string[] Ubicaciones a mostrar, en orden: "Público"
+     *                   siempre primero, seguida de la de administración
+     *                   que corresponda (si corresponde alguna).
+     */
+    public function locations()
     {
+        $locations = [Menus::LOC_PUBLICO];
+
         if (!is_user_logged_in()) {
-            return Menus::LOC_PUBLICO;
+            return $locations;
         }
 
         $scope = UserScope::get_instance();
 
         if ($scope->is_general_admin()) {
-            return Menus::LOC_ADMIN_GENERAL;
+            $locations[] = Menus::LOC_ADMIN_GENERAL;
+        } elseif (!empty($scope->managed_post_types())) {
+            $locations[] = Menus::LOC_ADMIN_MODULO;
         }
 
-        if (!empty($scope->managed_post_types())) {
-            return Menus::LOC_ADMIN_MODULO;
-        }
-
-        // Usuario logeado sin ningún rol de administración (por ejemplo,
-        // un suscriptor base recién activado): sigue viendo el menú público.
-        return Menus::LOC_PUBLICO;
+        return $locations;
     }
 }

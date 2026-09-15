@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
  * presentación, no validación de entrada — igual que en el resto del
  * proyecto, la navbar puede usarlas directo.
  */
-$location = MenuResolver::get_instance()->location();
+$locations = MenuResolver::get_instance()->locations();
 ?>
 <nav class="navbar navbar-expand-lg bg-transparent fixed-top">
     <div class="container-fluid">
@@ -42,24 +42,25 @@ $location = MenuResolver::get_instance()->location();
         </button>
 
         <div class="collapse navbar-collapse" id="egcNavbar">
-            <?php
-            wp_nav_menu([
-                'theme_location' => $location,
-                'container' => false,
-                'items_wrap' => '<ul id="%1$s" class="%2$s">%3$s</ul>',
-                'menu_class' => 'navbar-nav me-auto mb-2 mb-lg-0',
-                'walker' => new BootstrapNavWalker(),
-                'fallback_cb' => false,
-            ]);
-            ?>
+            <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
+                <?php foreach ($locations as $location):
+                    wp_nav_menu([
+                        'theme_location' => $location,
+                        'container' => false,
+                        'items_wrap' => '%3$s',
+                        'walker' => new BootstrapNavWalker(),
+                        'fallback_cb' => false,
+                    ]);
+                endforeach; ?>
+            </ul>
 
-            <ul class="navbar-nav ms-auto">
+            <ul class="navbar-nav mb-2 mb-lg-0">
                 <li class="nav-item dropdown">
                     <?php if (is_user_logged_in()): ?>
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button"
                             data-bs-toggle="dropdown" aria-expanded="false">
                             <img src="<?php echo esc_url(get_avatar_url(get_current_user_id())); ?>" alt="" width="28"
-                                height="28" class="rounded-circle border border-2" style="object-fit:cover;">
+                                height="28" class="rounded-circle border border-2 bg-orange-500" style="object-fit:cover;">
                         </a>
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li>
