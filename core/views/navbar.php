@@ -60,7 +60,8 @@ $locations = MenuResolver::get_instance()->locations();
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button"
                             data-bs-toggle="dropdown" aria-expanded="false">
                             <img src="<?php echo esc_url(get_avatar_url(get_current_user_id())); ?>" alt="" width="28"
-                                height="28" class="rounded-circle border border-2 bg-orange-500" style="object-fit:cover;">
+                                height="28" class="rounded-circle border border-2 border-primary bg-primary"
+                                style="object-fit:cover;">
                         </a>
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li>
