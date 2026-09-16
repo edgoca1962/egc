@@ -24,7 +24,10 @@ class Core
         Setup::get_instance();
         AdminGuard::get_instance();
         Assets::get_instance();
+        Mail::get_instance();
         RoleSync::get_instance();
+
+        // Fase 2 — usuarios, acceso y navegación.
         UserStatus::get_instance();
         AdminGeneralRole::get_instance();
         LoginGuard::get_instance();
@@ -36,5 +39,9 @@ class Core
         Account::get_instance();
         PasswordChange::get_instance();
         Menus::get_instance();
+
+        // Fase 3 — módulos reales: carga la lógica de cada módulo
+        // presente (ver ModuleLoader::load_modules()).
+        ModuleLoader::get_instance()->load_modules();
     }
 }

@@ -141,6 +141,14 @@ class Account
         require_once ABSPATH . 'wp-admin/includes/media.php';
 
         $overrides = [
+            // wp_handle_upload() por defecto exige que $_POST['action']
+            // sea 'wp_handle_upload' (o lo que se pase en 'action'); acá
+            // el POST real es 'egc_account_update', así que sin esto la
+            // subida fallaba siempre con "formulario inválido" antes de
+            // llegar a subir nada. El nonce propio (check_admin_referer(),
+            // arriba en handle_submission()) ya cubre la autenticidad del
+            // formulario.
+            'test_form' => false,
             'mimes' => [
                 'jpg|jpeg|jpe' => 'image/jpeg',
                 'png'          => 'image/png',

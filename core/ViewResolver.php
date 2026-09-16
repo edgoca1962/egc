@@ -9,15 +9,28 @@ if (!defined('ABSPATH')) {
 /**
  * Resuelve qué partial de contenido mostrar.
  *
- * Antes de caer al genérico (Página/Entrada nativa cualquiera), reconoce
- * las páginas propias del Core: son Páginas nativas sin post_content
- * (Pages::find_or_create() no les pone contenido, porque el contenido
- * lo arma la vista misma a partir del view_state() de su clase) — sin
- * este mapa, WordPress las mostraría vacías con el template genérico.
+ * Cuatro niveles, en este orden (el primero que matchea gana):
  *
- * Cuando existan módulos, esta clase va a crecer para consultar sus
- * manifests (páginas propias por slug) de la misma manera, antes de
- * caer a este fallback.
+ * 1. Las 6 páginas propias del Core (por slug fijo, ver
+ *    core_page_views()) — Páginas nativas sin post_content, porque el
+ *    contenido lo arma la vista misma a partir del view_state() de su
+ *    clase.
+ * 2. Cualquier otra Página nativa cuyo slug tenga una vista propia
+ *    dentro de un módulo (module_page_view()) — misma idea que el
+ *    punto 1 pero por convención de nombre de archivo, para que un
+ *    módulo no tenga que declarar nada: alcanza con crear
+ *    modules/<slug>/views/<slug-de-la-página>.php. Es el mismo
+ *    mecanismo que ya se usaba en el WP Modulado original.
+ * 3. El post_type actual (no "page"), si algún módulo lo declaró en
+ *    `post_types` de su manifest (module_content_view()) — ese módulo
+ *    es dueño de todo ese tipo de contenido, vista single o
+ *    archivo/listado según corresponda.
+ * 4. Fallback genérico: cualquier Página u otro contenido nativo sin
+ *    dueño ('core/views/pagina'), o nada ('core/views/sin-contenido').
+ *
+ * Entre módulos no hay validación de colisiones: gana el primero que
+ * discover() devuelva (orden de disco) — mismo costo/beneficio ya
+ * documentado en el WP Modulado original.
  */
 class ViewResolver
 {
@@ -40,6 +53,16 @@ class ViewResolver
             }
         }
 
+        $module_page = $this->module_page_view();
+        if ($module_page) {
+            return $module_page;
+        }
+
+        $module_content = $this->module_content_view();
+        if ($module_content) {
+            return $module_content;
+        }
+
         if (have_posts()) {
             return 'core/views/pagina';
         }
@@ -60,5 +83,76 @@ class ViewResolver
             Account::SLUG          => 'core/views/mi-cuenta',
             PasswordChange::SLUG   => 'core/views/cambiar-contrasena',
         ];
+    }
+
+    /**
+     * Página nativa (no una de las 6 del Core) cuyo slug coincide con
+     * un archivo de vista dentro de algún módulo presente.
+     *
+     * @return string|null
+     */
+    private function module_page_view()
+    {
+        if (!is_page()) {
+            return null;
+        }
+
+        $page = get_queried_object();
+        if (!$page || empty($page->post_name)) {
+            return null;
+        }
+
+        foreach (array_keys(ModuleLoader::get_instance()->discover()) as $slug) {
+            $view = $this->view_if_exists($slug, $page->post_name);
+            if ($view) {
+                return $view;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Contenido nativo que no es Página (una entrada, un CPT) cuyo
+     * post_type está declarado en `post_types` del manifest de algún
+     * módulo presente: single.php o archive.php de ese módulo, según
+     * si se está viendo un elemento o el listado.
+     *
+     * @return string|null
+     */
+    private function module_content_view()
+    {
+        $post_type = get_post_type() ?: 'post';
+
+        foreach (ModuleLoader::get_instance()->discover() as $slug => $manifest) {
+            if (!in_array($post_type, $this->post_types_of($manifest), true)) {
+                continue;
+            }
+
+            if (is_singular($post_type)) {
+                return $this->view_if_exists($slug, 'single');
+            }
+
+            if (is_post_type_archive($post_type) || ($post_type === 'post' && is_home())) {
+                return $this->view_if_exists($slug, 'archive');
+            }
+        }
+
+        return null;
+    }
+
+    private function view_if_exists($module_slug, $view_name)
+    {
+        $path = EGC_DIR . "/modules/{$module_slug}/views/{$view_name}.php";
+        return file_exists($path) ? "modules/{$module_slug}/views/{$view_name}" : null;
+    }
+
+    private function post_types_of($manifest)
+    {
+        if (!isset($manifest['post_types']) || !is_array($manifest['post_types'])) {
+            return [];
+        }
+
+        return $manifest['post_types'];
     }
 }

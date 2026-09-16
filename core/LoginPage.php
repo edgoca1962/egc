@@ -26,8 +26,26 @@ class LoginPage
 
     private function __construct()
     {
+        add_action('template_redirect', [$this, 'guard_access']);
         add_action('admin_post_nopriv_' . self::ACTION, [$this, 'handle_submission']);
         add_action('admin_post_' . self::ACTION, [$this, 'handle_submission']);
+    }
+
+    /**
+     * Un usuario ya logueado no tiene nada que hacer en la pantalla de
+     * login — lo saca de acá antes de que la vea, igual que las
+     * páginas que sí exigen sesión hacen lo inverso.
+     */
+    public function guard_access()
+    {
+        if (!is_page(self::SLUG)) {
+            return;
+        }
+
+        if (is_user_logged_in()) {
+            wp_safe_redirect(home_url('/'));
+            exit;
+        }
     }
 
     public function url()
