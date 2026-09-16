@@ -66,6 +66,6 @@ return [
     ],
 
     'assignable_roles' => [
-        'post' => ['blog_editor', 'blog_contributor'],
+        'post' => ['blog_editor', 'blog_author', 'blog_contributor'],
     ],
 ];
