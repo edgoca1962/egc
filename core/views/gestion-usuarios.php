@@ -28,6 +28,7 @@ $state = UserManagement::get_instance()->view_state();
                         <th><?php esc_html_e('Correo', 'egc'); ?></th>
                         <?php if ($state['can_manage_status']): ?>
                             <th><?php esc_html_e('Estado', 'egc'); ?></th>
+                            <th><?php esc_html_e('Administrador general', 'egc'); ?></th>
                         <?php endif; ?>
                         <?php foreach ($state['post_types'] as $post_type => $data): ?>
                             <th><?php echo esc_html($data['label']); ?></th>
@@ -64,6 +65,21 @@ $state = UserManagement::get_instance()->view_state();
                                             </button>
                                         </form>
                                     <?php endif; ?>
+                                </td>
+                                <td>
+                                    <form method="post" action="<?php echo esc_url($state['admin_general_form_action']); ?>">
+                                        <?php wp_nonce_field($state['admin_general_nonce_action'], $state['nonce_name']); ?>
+                                        <input type="hidden" name="action" value="egc_user_admin_general">
+                                        <input type="hidden" name="user_id" value="<?php echo esc_attr($user['id']); ?>">
+                                        <input type="hidden" name="is_admin_general"
+                                            value="<?php echo $user['is_admin_general'] ? '0' : '1'; ?>">
+                                        <button type="submit"
+                                            class="btn btn-sm <?php echo $user['is_admin_general'] ? 'btn-outline-danger' : 'btn-outline-primary'; ?>">
+                                            <?php echo $user['is_admin_general']
+                                                ? esc_html__('Quitar administrador general', 'egc')
+                                                : esc_html__('Hacer administrador general', 'egc'); ?>
+                                        </button>
+                                    </form>
                                 </td>
                             <?php endif; ?>
 

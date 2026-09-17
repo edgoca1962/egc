@@ -33,6 +33,8 @@ class UserManagement
 
     const ACTION_ROLES = 'egc_user_roles';
 
+    const ACTION_ADMIN_GENERAL = 'egc_user_admin_general';
+
     private $url = null;
 
     private function __construct()
@@ -40,6 +42,7 @@ class UserManagement
         add_action('template_redirect', [$this, 'guard_access']);
         add_action('admin_post_' . self::ACTION_STATUS, [$this, 'handle_status_change']);
         add_action('admin_post_' . self::ACTION_ROLES, [$this, 'handle_role_change']);
+        add_action('admin_post_' . self::ACTION_ADMIN_GENERAL, [$this, 'handle_admin_general_toggle']);
     }
 
     public function url()
@@ -98,7 +101,7 @@ class UserManagement
         $post_type_data = [];
         foreach ($post_types as $post_type) {
             $post_type_data[$post_type] = [
-                'label' => $post_type,
+                'label' => $scope->module_label($post_type),
                 'roles' => $this->role_labels($scope->assignable_roles($post_type)),
             ];
         }
@@ -110,11 +113,13 @@ class UserManagement
             'users'               => $this->users_rows($post_types, $scope),
             'error'               => $this->message('error'),
             'success'             => (bool) $this->message('ok'),
-            'status_form_action'  => admin_url('admin-post.php'),
-            'status_nonce_action' => self::ACTION_STATUS,
-            'roles_form_action'   => admin_url('admin-post.php'),
-            'roles_nonce_action'  => self::ACTION_ROLES,
-            'nonce_name'          => '_egc_nonce',
+            'status_form_action'        => admin_url('admin-post.php'),
+            'status_nonce_action'       => self::ACTION_STATUS,
+            'roles_form_action'         => admin_url('admin-post.php'),
+            'roles_nonce_action'        => self::ACTION_ROLES,
+            'admin_general_form_action'  => admin_url('admin-post.php'),
+            'admin_general_nonce_action' => self::ACTION_ADMIN_GENERAL,
+            'nonce_name'                => '_egc_nonce',
         ];
     }
 
@@ -153,6 +158,7 @@ class UserManagement
                 'status_label'         => UserStatus::get_instance()->all_statuses()[$status] ?? $status,
                 'valid_next_statuses'  => UserStatus::get_instance()->valid_next_statuses($status),
                 'roles'                => $roles,
+                'is_admin_general'     => in_array(AdminGeneralRole::ROLE, (array) $user->roles, true),
             ];
         }
 
@@ -251,6 +257,38 @@ class UserManagement
 
         if ($new_role !== '' && !in_array($new_role, (array) $user->roles, true)) {
             $user->add_role($new_role);
+        }
+
+        $this->back_with_ok();
+    }
+
+    /**
+     * Asigna o quita el rol 'administrador_general' a otro usuario. Es
+     * su propia acción (no una más del <select> por recurso) porque no
+     * es un rol de módulo: es la misma "puerta global" que el cambio de
+     * estado, así que se autoriza con la misma capacidad (edit_users) y
+     * nunca toca al superusuario.
+     */
+    public function handle_admin_general_toggle()
+    {
+        check_admin_referer(self::ACTION_ADMIN_GENERAL, '_egc_nonce');
+
+        if (!current_user_can('edit_users')) {
+            $this->back_with_error('forbidden');
+        }
+
+        $user_id = isset($_POST['user_id']) ? absint($_POST['user_id']) : 0;
+        $grant   = !empty($_POST['is_admin_general']);
+
+        $user = $user_id ? get_userdata($user_id) : null;
+        if (!$user || user_can($user, 'manage_options')) {
+            $this->back_with_error('forbidden');
+        }
+
+        if ($grant) {
+            $user->add_role(AdminGeneralRole::ROLE);
+        } else {
+            $user->remove_role(AdminGeneralRole::ROLE);
         }
 
         $this->back_with_ok();

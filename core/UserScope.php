@@ -95,6 +95,26 @@ class UserScope
         return [];
     }
 
+    /**
+     * @return string Nombre corto para la columna de "Gestión de
+     *                 usuarios": la 'sigla' del manifest si la declaró,
+     *                 si no su 'nombre', y si tampoco declaró nada, el
+     *                 post_type tal cual (mejor eso que una columna sin
+     *                 título).
+     */
+    public function module_label($post_type)
+    {
+        foreach (ModuleLoader::get_instance()->discover() as $manifest) {
+            if (!in_array($post_type, $this->post_types_of($manifest), true)) {
+                continue;
+            }
+
+            return $manifest['sigla'] ?? $manifest['nombre'] ?? $post_type;
+        }
+
+        return $post_type;
+    }
+
     private function post_types_of($manifest)
     {
         if (!isset($manifest['post_types']) || !is_array($manifest['post_types'])) {
