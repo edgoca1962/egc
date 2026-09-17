@@ -37,6 +37,8 @@ class PostManagement
 
     const ACTION_TRASH = 'egc_blog_trash';
 
+    const NONCE_NAME = '_egc_nonce';
+
     private $url = null;
 
     private function __construct()
@@ -88,8 +90,6 @@ class PostManagement
      *   form_action: string,
      *   nonce_action: string,
      *   nonce_name: string,
-     *   trash_form_action: string,
-     *   trash_nonce_action: string,
      * }
      */
     public function view_state()
@@ -97,16 +97,33 @@ class PostManagement
         $editing_id = isset($_GET['post_id']) ? absint($_GET['post_id']) : 0;
 
         return [
-            'can_publish'        => current_user_can('publish_posts'),
-            'editing'            => $editing_id ? $this->editable_post($editing_id) : null,
-            'posts'              => $this->posts_rows(),
-            'error'              => $this->message('error'),
-            'success'            => (bool) $this->message('ok'),
-            'form_action'        => admin_url('admin-post.php'),
-            'nonce_action'       => self::ACTION_SAVE,
-            'nonce_name'         => '_egc_nonce',
-            'trash_form_action'  => admin_url('admin-post.php'),
-            'trash_nonce_action' => self::ACTION_TRASH,
+            'can_publish' => current_user_can('publish_posts'),
+            'editing'     => $editing_id ? $this->editable_post($editing_id) : null,
+            'posts'       => $this->posts_rows(),
+            'error'       => $this->message('error'),
+            'success'     => (bool) $this->message('ok'),
+            'form_action' => admin_url('admin-post.php'),
+            'nonce_action' => self::ACTION_SAVE,
+            'nonce_name'  => self::NONCE_NAME,
+        ];
+    }
+
+    /**
+     * Autorización + acción para UN post puntual: lo que puede hacer el
+     * usuario actual con ese post (editar, eliminar) y el link para
+     * hacerlo. Único lugar donde se decide esto — archive.php, single.php
+     * y panel.php (vía posts_rows()) lo consumen ya resuelto, en vez de
+     * repetir current_user_can() en cada vista.
+     *
+     * @return array{id:int, can_edit:bool, edit_url:string, can_trash:bool}
+     */
+    public function actions_for($post_id)
+    {
+        return [
+            'id'        => $post_id,
+            'can_edit'  => current_user_can('edit_post', $post_id),
+            'edit_url'  => add_query_arg('post_id', $post_id, $this->url()),
+            'can_trash' => current_user_can('delete_post', $post_id),
         ];
     }
 
@@ -142,15 +159,11 @@ class PostManagement
 
         $rows = [];
         foreach ($query->posts as $post) {
-            $rows[] = [
-                'id'        => $post->ID,
+            $rows[] = array_merge($this->actions_for($post->ID), [
                 'title'     => $post->post_title !== '' ? $post->post_title : __('(sin título)', 'egc'),
                 'status'    => $post->post_status,
-                'can_edit'  => current_user_can('edit_post', $post->ID),
-                'can_trash' => current_user_can('delete_post', $post->ID),
-                'edit_url'  => add_query_arg('post_id', $post->ID, $this->url()),
                 'permalink' => get_permalink($post),
-            ];
+            ]);
         }
 
         return $rows;

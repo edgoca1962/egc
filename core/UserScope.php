@@ -43,6 +43,14 @@ class UserScope
      *              bien es Administrador General (accede a todo), o
      *              bien tiene la capacidad "de otros" de ese recurso
      *              (es administrador de ese módulo).
+     *
+     * La capacidad se lee de get_post_type_object($post_type)->cap, no
+     * se reconstruye agregando una "s": esa "s" no es un plural
+     * gramatical, es el sufijo que arma register_post_type() cuando el
+     * capability_type es un string simple, y falla apenas un módulo
+     * declara un plural irregular (capability_type => ['actividad',
+     * 'actividades']). WordPress ya calculó el nombre real de la
+     * capacidad al registrar el CPT; acá solo se lee.
      */
     public function manages($post_type)
     {
@@ -50,7 +58,12 @@ class UserScope
             return true;
         }
 
-        return current_user_can("edit_others_{$post_type}s");
+        $post_type_object = get_post_type_object($post_type);
+        if (!$post_type_object) {
+            return false;
+        }
+
+        return current_user_can($post_type_object->cap->edit_others_posts);
     }
 
     /**

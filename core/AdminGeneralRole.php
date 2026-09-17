@@ -87,26 +87,36 @@ class AdminGeneralRole
     }
 
     /**
-     * Nombres de capacidad para un post_type, asumiendo la convención
-     * del proyecto: capability_type del CPT == slug del post_type
-     * (plural agregando 's'). Es la misma convención que usa UserScope
-     * para lo contrario (recortar el acceso a "lo propio").
+     * Nombres de capacidad para un post_type, leídos de
+     * get_post_type_object($post_type)->cap — el objeto que WordPress ya
+     * arma al registrar el CPT — en vez de reconstruirlos agregando una
+     * "s". Esa "s" no es un plural gramatical: es el sufijo que
+     * register_post_type() usa por defecto cuando capability_type es un
+     * string simple, y no coincide con la capacidad real apenas un
+     * módulo declara un plural irregular (capability_type =>
+     * ['actividad', 'actividades']). Misma corrección que UserScope
+     * aplica del lado de "administra este post_type".
      */
     private function capabilities_for($post_type)
     {
-        $plural = $post_type . 's';
+        $post_type_object = get_post_type_object($post_type);
+        if (!$post_type_object) {
+            return [];
+        }
+
+        $cap = $post_type_object->cap;
 
         return [
-            "edit_{$plural}",
-            "edit_others_{$plural}",
-            "edit_published_{$plural}",
-            "edit_private_{$plural}",
-            "publish_{$plural}",
-            "read_private_{$plural}",
-            "delete_{$plural}",
-            "delete_others_{$plural}",
-            "delete_published_{$plural}",
-            "delete_private_{$plural}",
+            $cap->edit_posts,
+            $cap->edit_others_posts,
+            $cap->edit_published_posts,
+            $cap->edit_private_posts,
+            $cap->publish_posts,
+            $cap->read_private_posts,
+            $cap->delete_posts,
+            $cap->delete_others_posts,
+            $cap->delete_published_posts,
+            $cap->delete_private_posts,
         ];
     }
 }
