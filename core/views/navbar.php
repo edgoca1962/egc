@@ -55,7 +55,7 @@ $locations = MenuResolver::get_instance()->locations();
                 endforeach; ?>
             </ul>
 
-            <ul class="navbar-nav ms-auto">
+            <ul class="navbar-nav">
                 <li class="nav-item dropdown">
                     <?php if (is_user_logged_in()) : ?>
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button"
@@ -81,6 +81,16 @@ $locations = MenuResolver::get_instance()->locations();
                                     </a>
                                 </li>
                             <?php endif; ?>
+                            <?php
+                            /**
+                             * Cada módulo cuelga acá sus propios <li> de
+                             * administración (ver PostManagement::render_navbar_link()
+                             * en el Blog) — el Core no conoce ni referencia
+                             * ningún módulo puntual, así que sacar la carpeta
+                             * de un módulo no deja nada roto acá.
+                             */
+                            do_action('egc_navbar_admin_dropdown');
+                            ?>
                             <li>
                                 <hr class="dropdown-divider">
                             </li>

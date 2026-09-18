@@ -8828,17 +8828,6 @@ a:hover {
   animation: rotacion 3.5s linear infinite;
 }
 
-.saldos:hover::before,
-.saldos:hover::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  z-index: -1;
-  background: conic-gradient(from var(--angle), transparent 90%, white);
-  border-radius: inherit;
-  animation: rotacion 3.5s linear infinite;
-}
-
 .b_color::after {
   filter: blur(10px);
 }

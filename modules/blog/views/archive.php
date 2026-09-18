@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 
         <?php if (current_user_can('edit_posts')) : ?>
             <a class="btn btn-primary"
-               href="<?php echo esc_url(PostManagement::get_instance()->url()); ?>"
+               href="<?php echo esc_url(PostManagement::get_instance()->url_editar()); ?>"
                aria-label="<?php esc_attr_e('Crear artículo', 'egc'); ?>"
                title="<?php esc_attr_e('Crear artículo', 'egc'); ?>">
                 <i class="bi bi-plus-lg" aria-hidden="true"></i>
@@ -30,7 +30,13 @@ if (!defined('ABSPATH')) {
                         <?php endif; ?>
                         <div class="card-body d-flex flex-column">
                             <h2 class="h5 card-title">
-                                <a class="text-decoration-none" href="<?php the_permalink(); ?>"><?php the_title(); ?></a>
+                                <?php
+                                // Con ?volver= para que el botón "Regresar" del
+                                // single lleve de vuelta a esta página exacta
+                                // (con su paginación) — ver PostManagement::with_return_here().
+                                $post_url = PostManagement::get_instance()->with_return_here(get_permalink());
+                                ?>
+                                <a class="text-decoration-none" href="<?php echo esc_url($post_url); ?>"><?php the_title(); ?></a>
                             </h2>
                             <p class="card-text flex-grow-1"><?php the_excerpt(); ?></p>
                             <?php

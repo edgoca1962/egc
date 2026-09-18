@@ -5,6 +5,7 @@ namespace EGC\Modules\Blog;
 use EGC\Core\LoginPage;
 use EGC\Core\Pages;
 use EGC\Core\Singleton;
+use EGC\Core\UserScope;
 use WP_Query;
 
 if (!defined('ABSPATH')) {
@@ -14,11 +15,16 @@ if (!defined('ABSPATH')) {
 /**
  * CRUD de entradas del Blog (post nativo) sin pasar por wp-admin, en
  * dos páginas:
- * - blog-panel: alta (formulario vacío) + listado propio/ajeno según
- *   edit_others_posts.
- * - blog-editar: edición de UN post puntual (?post_id=), presentado
- *   solo, sin el listado — para no forzar al usuario a pasar por el
- *   panel para corregir una entrada.
+ * - blog-editar: alta Y edición de UN post (con ?post_id= es edición,
+ *   sin él es "nueva publicación"). Es el único formulario: se llega
+ *   acá desde el botón "Crear artículo" de archive.php o desde el
+ *   ícono de editar de cualquier post.
+ * - articulos-pendientes: cola de revisión — todo lo que está en
+ *   `pending` (lo que un blog_contributor manda a revisar, porque no
+ *   tiene publish_posts), visible solo para quien administra el
+ *   recurso (UserScope::manages('post'): Administrador General o
+ *   blog_editor). No es una pantalla de autoservicio para el autor:
+ *   es la cola que revisa un administrador.
  *
  * `post` es el CPT nativo de WordPress — no se registra nada acá, y la
  * distinción propio/ajeno la resuelve WordPress solo, vía
@@ -27,88 +33,96 @@ if (!defined('ABSPATH')) {
  * el autor. Nada de comparar post_author en este archivo.
  *
  * Contrato de clase página-back, igual al de las páginas del Core:
- * const SLUG, url() memoizado vía Pages::find_or_create(), view_state()
- * (todo pre-resuelto para la vista), handle_*() colgado de
- * admin_post_{action}, guard_access() en template_redirect.
+ * const SLUG_*, url_*() memoizado vía Pages::find_or_create(),
+ * view_state_*() (todo pre-resuelto para la vista), handle_*()
+ * colgado de admin_post_{action}, guard_access() en template_redirect.
  */
 class PostManagement
 {
     use Singleton;
 
-    const SLUG = 'blog-panel';
-
     const SLUG_EDITAR = 'blog-editar';
+
+    const SLUG_PENDIENTES = 'articulos-pendientes';
 
     const ACTION_SAVE = 'egc_blog_save';
 
     const ACTION_TRASH = 'egc_blog_trash';
 
+    const ACTION_PUBLICAR = 'egc_blog_publicar';
+
     const NONCE_NAME = '_egc_nonce';
 
-    private $url = null;
-
     private $url_editar = null;
+
+    private $url_pendientes = null;
 
     private function __construct()
     {
         add_action('template_redirect', [$this, 'guard_access']);
         add_action('admin_post_' . self::ACTION_SAVE, [$this, 'handle_save']);
         add_action('admin_post_' . self::ACTION_TRASH, [$this, 'handle_trash']);
+        add_action('admin_post_' . self::ACTION_PUBLICAR, [$this, 'handle_publicar']);
+
+        // Core dispara egc_navbar_admin_dropdown en el mismo <li> donde
+        // vive "Gestión de usuarios", para que un módulo pueda sumar su
+        // propio link sin que navbar.php (Core) tenga que conocer al
+        // Blog — si esta carpeta se saca, este hook simplemente deja de
+        // engancharse, nada en Core queda referenciando una clase que
+        // ya no existe.
+        add_action('egc_navbar_admin_dropdown', [$this, 'render_navbar_link']);
     }
 
-    public function url()
+    /**
+     * Puente para el <li> del dropdown del navbar: decide si
+     * corresponde mostrarlo (solo a quien administra el recurso
+     * 'post'), la vista (el partial) solo pinta.
+     */
+    public function render_navbar_link()
     {
-        if ($this->url === null) {
-            $id = Pages::get_instance()->find_or_create(__('Mis publicaciones', 'egc'), self::SLUG);
-            $this->url = $id ? get_permalink($id) : home_url('/');
+        if (!UserScope::get_instance()->manages('post')) {
+            return;
         }
 
-        return $this->url;
+        include EGC_DIR . '/modules/blog/views/partials/navbar-admin-link.php';
     }
 
     public function url_editar()
     {
         if ($this->url_editar === null) {
-            $id = Pages::get_instance()->find_or_create(__('Editar publicación', 'egc'), self::SLUG_EDITAR);
+            $id = Pages::get_instance()->find_or_create(__('Publicación', 'egc'), self::SLUG_EDITAR);
             $this->url_editar = $id ? get_permalink($id) : home_url('/');
         }
 
         return $this->url_editar;
     }
 
-    /**
-     * Nadie sin sesión y sin edit_posts llega a ninguna de las dos
-     * páginas. Ocultar el link/botón es presentación; esto es lo que
-     * de verdad las protege.
-     */
+    public function url_pendientes()
+    {
+        if ($this->url_pendientes === null) {
+            $id = Pages::get_instance()->find_or_create(__('Artículos pendientes de publicar', 'egc'), self::SLUG_PENDIENTES);
+            $this->url_pendientes = $id ? get_permalink($id) : home_url('/');
+        }
+
+        return $this->url_pendientes;
+    }
+
     public function guard_access()
     {
-        if (is_page(self::SLUG)) {
-            $this->guard_panel();
+        if (is_page(self::SLUG_EDITAR)) {
+            $this->guard_editar();
             return;
         }
 
-        if (is_page(self::SLUG_EDITAR)) {
-            $this->guard_editar();
-        }
-    }
-
-    private function guard_panel()
-    {
-        if (!is_user_logged_in()) {
-            wp_safe_redirect(LoginPage::get_instance()->url());
-            exit;
-        }
-
-        if (!current_user_can('edit_posts')) {
-            wp_safe_redirect(home_url('/'));
-            exit;
+        if (is_page(self::SLUG_PENDIENTES)) {
+            $this->guard_pendientes();
         }
     }
 
     /**
-     * A blog-editar solo se llega con un post_id puntual sobre el que
-     * se tenga edit_post — nunca a "editar en blanco".
+     * Sin post_id es "nueva publicación": alcanza con edit_posts. Con
+     * post_id es edición de una entrada puntual: hace falta edit_post
+     * sobre ESE post — nunca "editar en blanco" con un id ajeno.
      */
     private function guard_editar()
     {
@@ -119,34 +133,36 @@ class PostManagement
 
         $post_id = isset($_GET['post_id']) ? absint($_GET['post_id']) : 0;
 
-        if (!$post_id || !current_user_can('edit_post', $post_id)) {
-            wp_safe_redirect($this->url());
+        if ($post_id) {
+            if (!current_user_can('edit_post', $post_id)) {
+                wp_safe_redirect($this->archive_url());
+                exit;
+            }
+            return;
+        }
+
+        if (!current_user_can('edit_posts')) {
+            wp_safe_redirect($this->archive_url());
             exit;
         }
     }
 
     /**
-     * @return array{
-     *   can_publish: bool,
-     *   posts: array<int,array>,
-     *   error: string,
-     *   success: bool,
-     *   form_action: string,
-     *   nonce_action: string,
-     *   nonce_name: string,
-     * }
+     * Cola de revisión: solo para quien administra el recurso 'post'
+     * (Administrador General o blog_editor) — nunca para el autor del
+     * post pendiente, aunque sea el suyo.
      */
-    public function view_state()
+    private function guard_pendientes()
     {
-        return [
-            'can_publish' => current_user_can('publish_posts'),
-            'posts'       => $this->posts_rows(),
-            'error'       => $this->message('error'),
-            'success'     => (bool) $this->message('ok'),
-            'form_action' => admin_url('admin-post.php'),
-            'nonce_action' => self::ACTION_SAVE,
-            'nonce_name'  => self::NONCE_NAME,
-        ];
+        if (!is_user_logged_in()) {
+            wp_safe_redirect(LoginPage::get_instance()->url());
+            exit;
+        }
+
+        if (!UserScope::get_instance()->manages('post')) {
+            wp_safe_redirect($this->archive_url());
+            exit;
+        }
     }
 
     /**
@@ -159,16 +175,18 @@ class PostManagement
      *   nonce_action: string,
      *   nonce_name: string,
      *   back_url: string,
-     * }|null null si el post_id de la URL ya no es válido (se borró
-     *        entre que se armó el link y se abrió la página): guard_access()
-     *        ya filtró el caso normal, esto es solo defensivo.
+     * }|null 'editing' es null en modo "nueva publicación". El propio
+     *        array puede ser null si el post_id de la URL ya no es
+     *        válido (se borró entre que se armó el link y se abrió la
+     *        página): guard_access() ya filtró el caso normal, esto es
+     *        solo defensivo.
      */
     public function view_state_editar()
     {
         $post_id = isset($_GET['post_id']) ? absint($_GET['post_id']) : 0;
         $editing = $post_id ? $this->editable_post($post_id) : null;
 
-        if (!$editing) {
+        if ($post_id && !$editing) {
             return null;
         }
 
@@ -185,36 +203,102 @@ class PostManagement
     }
 
     /**
+     * @return array{
+     *   posts: array<int,array>,
+     *   error: string,
+     *   success: bool,
+     *   form_action: string,
+     *   nonce_action: string,
+     *   nonce_name: string,
+     * }
+     */
+    public function view_state_pendientes()
+    {
+        return [
+            'posts'        => $this->pending_rows(),
+            'error'        => $this->message('error'),
+            'success'      => (bool) $this->message('ok'),
+            'form_action'  => admin_url('admin-post.php'),
+            'nonce_action' => self::ACTION_PUBLICAR,
+            'nonce_name'   => self::NONCE_NAME,
+        ];
+    }
+
+    /**
      * Autorización + acción para UN post puntual: lo que puede hacer el
      * usuario actual con ese post (editar, eliminar) y el link para
-     * hacerlo. Único lugar donde se decide esto — archive.php, single.php
-     * y panel.php (vía posts_rows()) lo consumen ya resuelto, en vez de
-     * repetir current_user_can() en cada vista.
+     * hacerlo. Único lugar donde se decide esto — archive.php y
+     * single.php lo consumen ya resuelto, en vez de repetir
+     * current_user_can() en cada vista. articulos-pendientes.php no lo
+     * usa: esa pantalla no edita ni elimina, solo publica.
      *
      * @return array{id:int, can_edit:bool, edit_url:string, can_trash:bool}
      */
     public function actions_for($post_id)
     {
+        $edit_url = add_query_arg('post_id', $post_id, $this->url_editar());
+
         return [
             'id'        => $post_id,
             'can_edit'  => current_user_can('edit_post', $post_id),
-            'edit_url'  => add_query_arg('post_id', $post_id, $this->url_editar()),
+            'edit_url'  => $this->with_return_here($edit_url),
             'can_trash' => current_user_can('delete_post', $post_id),
         ];
     }
 
     /**
-     * URL segura para "volver" a la pantalla desde la que se llegó acá:
-     * el Referer que manda el navegador, validado contra el propio
-     * sitio (nunca un open redirect a otro dominio), con el panel como
-     * última red si no hay Referer utilizable (llegada directa, un
-     * buscador, etc.).
+     * URL para "volver" a la pantalla desde la que se llegó acá: lo que
+     * traiga ?volver= en ESTA request, validado contra el propio sitio
+     * (nunca un open redirect a otro dominio), con el archivo del blog
+     * como última red si no hay ninguno (llegada directa, un buscador).
+     *
+     * No usa el header Referer del navegador (wp_get_referer()): en la
+     * práctica no es confiable acá — política de referrer del propio
+     * navegador, y en entornos como LocalWP el host que ve el navegador
+     * puede no ser exactamente el mismo que home_url(), con lo que
+     * wp_validate_redirect() termina rechazando un Referer legítimo del
+     * mismo sitio. ?volver= es una URL que arma el propio EGC (siempre
+     * con home_url()), así que no tiene ese problema.
      */
     public function back_url()
     {
-        $referer = wp_get_referer();
+        $requested = isset($_GET['volver']) ? wp_unslash($_GET['volver']) : '';
 
-        return $referer ? wp_validate_redirect($referer, $this->url()) : $this->url();
+        return $requested !== '' ? wp_validate_redirect($requested, $this->archive_url()) : $this->archive_url();
+    }
+
+    /**
+     * Le agrega a $url el ?volver= que hace que, si $url es blog-editar
+     * o cualquier otra pantalla con botón "Regresar", ese botón vuelva
+     * exactamente a la pantalla actual (con su paginación, filtros,
+     * etc., porque es la URL completa de esta request). Encadena solo:
+     * si la URL actual YA trae su propio ?volver= (por ejemplo,
+     * single.php al que se llegó desde el archivo), ese valor viaja
+     * adentro sin que haga falta nada especial — así "regresar" funciona
+     * salto por salto en vez de ir siempre al mismo lugar.
+     */
+    public function with_return_here($url)
+    {
+        return add_query_arg('volver', rawurlencode($this->current_url()), $url);
+    }
+
+    private function current_url()
+    {
+        return home_url(add_query_arg(null, null));
+    }
+
+    /**
+     * URL del listado público del blog (el post_type nativo 'post' no
+     * tiene "archivo" registrado como un CPT propio — es la página de
+     * entradas que WordPress ya resuelve solo, estática o la portada).
+     */
+    private function archive_url()
+    {
+        if (get_option('show_on_front') === 'page' && get_option('page_for_posts')) {
+            return get_permalink(get_option('page_for_posts'));
+        }
+
+        return home_url('/');
     }
 
     private function editable_post($post_id)
@@ -237,27 +321,31 @@ class PostManagement
         ];
     }
 
-    private function posts_rows()
+    /**
+     * Filas de la cola de revisión: únicamente lo necesario para
+     * cambiar el estatus (id + can_publish), nada de edit_url/can_trash
+     * — esta pantalla no es un editor ni un eliminador, es la revisión
+     * de pending a publish.
+     */
+    private function pending_rows()
     {
-        // Sin filtro por post_author acá a propósito: WP_Query devuelve
-        // todo, y es current_user_can('edit_post'/'delete_post', $id) —
-        // no una condición de post_author en este archivo — lo que
-        // decide, fila por fila, qué puede tocar quién.
         $query = new WP_Query([
             'post_type'      => 'post',
-            'post_status'    => ['publish', 'draft', 'pending', 'future'],
+            'post_status'    => 'pending',
             'posts_per_page' => -1,
             'orderby'        => 'date',
-            'order'          => 'DESC',
+            'order'          => 'ASC', // los que más tiempo llevan esperando revisión, primero.
         ]);
 
         $rows = [];
         foreach ($query->posts as $post) {
-            $rows[] = array_merge($this->actions_for($post->ID), [
-                'title'     => $post->post_title !== '' ? $post->post_title : __('(sin título)', 'egc'),
-                'status'    => $post->post_status,
-                'permalink' => get_permalink($post),
-            ]);
+            $rows[] = [
+                'id'          => $post->ID,
+                'title'       => $post->post_title !== '' ? $post->post_title : __('(sin título)', 'egc'),
+                'author'      => get_the_author_meta('display_name', $post->post_author),
+                'date'        => get_the_date('', $post),
+                'can_publish' => current_user_can('publish_posts') && current_user_can('edit_post', $post->ID),
+            ];
         }
 
         return $rows;
@@ -292,18 +380,16 @@ class PostManagement
         $post_id = isset($_POST['post_id']) ? absint($_POST['post_id']) : 0;
         $title   = isset($_POST['post_title']) ? sanitize_text_field(wp_unslash($_POST['post_title'])) : '';
         $content = isset($_POST['post_content']) ? wp_kses_post(wp_unslash($_POST['post_content'])) : '';
-        $status  = isset($_POST['post_status']) && $_POST['post_status'] === 'publish' ? 'publish' : 'draft';
 
         if ($title === '') {
             $this->back_with_error('empty_title');
         }
 
-        // Quien no puede publicar, no publica aunque lo mande en el
-        // formulario: se manda a revisión, igual que hace WordPress
-        // nativo con el rol Contributor.
-        if ($status === 'publish' && !current_user_can('publish_posts')) {
-            $status = 'pending';
-        }
+        // El estatus nunca viene del formulario: es una decisión de
+        // facultades, no una entrada del usuario. Quien puede publicar,
+        // publica; quien no, queda pendiente de revisión — igual que
+        // hace WordPress nativo con el rol Contributor.
+        $status = current_user_can('publish_posts') ? 'publish' : 'pending';
 
         $data = [
             'post_type'    => 'post',
@@ -345,6 +431,35 @@ class PostManagement
         $this->back_with_ok();
     }
 
+    /**
+     * La única acción de articulos-pendientes.php: pasa un post de
+     * pending a publish. No toca título ni contenido — para eso ya
+     * está blog-editar. current_user_can('publish_posts') más
+     * edit_post($id) porque el meta_cap "publish_post" no distingue
+     * "propio pendiente" de "ajeno pendiente" de forma directa; esta
+     * pareja es la misma que ya usa handle_save() para decidir si algo
+     * se publica o se manda a revisión.
+     */
+    public function handle_publicar()
+    {
+        check_admin_referer(self::ACTION_PUBLICAR, self::NONCE_NAME);
+
+        $post_id = isset($_POST['post_id']) ? absint($_POST['post_id']) : 0;
+        $post    = $post_id ? get_post($post_id) : null;
+
+        if (!$post || $post->post_type !== 'post' || $post->post_status !== 'pending') {
+            $this->back_with_error('forbidden');
+        }
+
+        if (!current_user_can('publish_posts') || !current_user_can('edit_post', $post_id)) {
+            $this->back_with_error('forbidden');
+        }
+
+        wp_update_post(['ID' => $post_id, 'post_status' => 'publish']);
+
+        $this->back_with_ok();
+    }
+
     private function back_with_ok()
     {
         wp_safe_redirect(add_query_arg('ok', '1', $this->redirect_target()));
@@ -359,16 +474,17 @@ class PostManagement
 
     /**
      * Adónde volver después de guardar o eliminar. Si el formulario
-     * mandó un redirect_to explícito (blog-editar, o el trash de
-     * single.php, que lo arman con back_url() al pintarse) se usa ese,
-     * validado contra el sitio; si no, el Referer de la propia request
-     * (el caso normal al eliminar desde archive.php o panel.php: te
-     * quedás en la misma pantalla); y si no hay ninguno, el panel.
+     * mandó un redirect_to explícito (blog-editar —alta o edición—, o
+     * el trash de single.php, que lo arman con back_url() al pintarse)
+     * se usa ese, validado contra el sitio; si no, el Referer de la
+     * propia request (el caso normal al eliminar desde archive.php o
+     * articulos-pendientes.php: te quedás en la misma pantalla); y si
+     * no hay ninguno, el archivo del blog.
      *
-     * Un solo redirect_to explícito hace falta porque, para
-     * blog-editar, el Referer de esta request ya es blog-editar (la
-     * propia pantalla del formulario), no la pantalla de dos pasos
-     * atrás a la que se quiere volver.
+     * El redirect_to explícito hace falta para blog-editar porque el
+     * Referer de ESTA request ya es blog-editar (la propia pantalla
+     * del formulario), no la pantalla de dos pasos atrás a la que se
+     * quiere volver.
      */
     private function redirect_target()
     {
