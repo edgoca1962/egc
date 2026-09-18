@@ -71,6 +71,56 @@ class ViewResolver
     }
 
     /**
+     * El manifest del módulo dueño de lo que se está viendo ahora mismo
+     * — página propia de un módulo o post_type declarado por uno —, o
+     * null si es una página del Core o contenido sin dueño. Es la misma
+     * pregunta que ya resuelven module_page_view() y
+     * module_content_view() para elegir la vista; se expone acá para
+     * que Banner (que necesita la misma respuesta para el título) la
+     * consulte en vez de tener su propia versión de este cálculo.
+     *
+     * @return array|null
+     */
+    public function current_module()
+    {
+        $slug = $this->current_module_slug();
+
+        return $slug ? ModuleLoader::get_instance()->discover()[$slug] : null;
+    }
+
+    private function current_module_slug()
+    {
+        if (is_page()) {
+            $page = get_queried_object();
+            if (!$page || empty($page->post_name)) {
+                return null;
+            }
+
+            foreach (array_keys(ModuleLoader::get_instance()->discover()) as $slug) {
+                if ($this->view_if_exists($slug, $page->post_name)) {
+                    return $slug;
+                }
+            }
+
+            return null;
+        }
+
+        $post_type = get_post_type() ?: 'post';
+
+        foreach (ModuleLoader::get_instance()->discover() as $slug => $manifest) {
+            if (!in_array($post_type, $this->post_types_of($manifest), true)) {
+                continue;
+            }
+
+            if (is_singular($post_type) || is_post_type_archive($post_type) || ($post_type === 'post' && is_home())) {
+                return $slug;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @return array<string,string> slug de Página => vista propia.
      */
     private function core_page_views()
@@ -102,14 +152,9 @@ class ViewResolver
             return null;
         }
 
-        foreach (array_keys(ModuleLoader::get_instance()->discover()) as $slug) {
-            $view = $this->view_if_exists($slug, $page->post_name);
-            if ($view) {
-                return $view;
-            }
-        }
+        $slug = $this->current_module_slug();
 
-        return null;
+        return $slug ? $this->view_if_exists($slug, $page->post_name) : null;
     }
 
     /**
@@ -122,20 +167,23 @@ class ViewResolver
      */
     private function module_content_view()
     {
+        if (is_page()) {
+            return null;
+        }
+
         $post_type = get_post_type() ?: 'post';
+        $slug      = $this->current_module_slug();
 
-        foreach (ModuleLoader::get_instance()->discover() as $slug => $manifest) {
-            if (!in_array($post_type, $this->post_types_of($manifest), true)) {
-                continue;
-            }
+        if (!$slug) {
+            return null;
+        }
 
-            if (is_singular($post_type)) {
-                return $this->view_if_exists($slug, 'single');
-            }
+        if (is_singular($post_type)) {
+            return $this->view_if_exists($slug, 'single');
+        }
 
-            if (is_post_type_archive($post_type) || ($post_type === 'post' && is_home())) {
-                return $this->view_if_exists($slug, 'archive');
-            }
+        if (is_post_type_archive($post_type) || ($post_type === 'post' && is_home())) {
+            return $this->view_if_exists($slug, 'archive');
         }
 
         return null;
