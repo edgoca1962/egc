@@ -37,11 +37,26 @@ $back_url = PostManagement::get_instance()->back_url();
 
         <div class="mb-5"><?php the_content(); ?></div>
 
-        <?php if (comments_open() || get_comments_number()) : ?>
-            <hr>
-            <?php wp_list_comments(['style' => 'div', 'short_ping' => true]); ?>
-            <?php the_comments_pagination(); ?>
-            <?php comment_form(); ?>
-        <?php endif; ?>
+        <?php
+        /**
+         * comments_template(), no include: es la función nativa de
+         * WordPress la que arma $wp_query->comments/comment_count a
+         * partir de get_comments() — have_comments() y
+         * wp_list_comments() (sin argumento $comments explícito, como
+         * los usa el partial) leen de ahí, no del post actual. Un
+         * include directo del partial nunca la llama, así que esas dos
+         * funciones veían siempre 0 comentarios aunque el post tuviera
+         * comentarios reales en la base de datos — pasaba desapercibido
+         * porque "0 comentarios" es también el estado esperado sin
+         * comentarios.
+         *
+         * El parámetro es la ruta del partial relativa a la raíz del
+         * tema (comments_template() la resuelve sola contra
+         * STYLESHEETPATH/TEMPLATEPATH), así que no hace falta un
+         * comments.php propio en la raíz: el partial existente se usa
+         * tal cual.
+         */
+        comments_template('/core/views/partials/comentarios.php');
+        ?>
     <?php endwhile; ?>
 </article>
