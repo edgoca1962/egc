@@ -25,7 +25,7 @@ $back_url = PostManagement::get_instance()->back_url();
                 // Referer del trash ya es la pantalla correcta a la que
                 // volver), acá hace falta decirlo explícito.
                 $actions['redirect_to'] = $back_url;
-                include EGC_DIR . '/modules/blog/views/partials/post-actions.php';
+                include EGC_DIR . '/core/views/partials/post-actions.php';
             }
             ?>
         </div>

@@ -24,7 +24,13 @@ if (!defined('ABSPATH')) {
  * 3. El post_type actual (no "page"), si algún módulo lo declaró en
  *    `post_types` de su manifest (module_content_view()) — ese módulo
  *    es dueño de todo ese tipo de contenido, vista single o
- *    archivo/listado según corresponda.
+ *    archivo/listado según corresponda. Primero se busca la vista
+ *    dentro de la subcarpeta propia del CPT
+ *    (modules/<módulo>/<post_type>/views/…) — la convención para un
+ *    módulo con más de un CPT, como SGF — y si no está ahí, se cae a
+ *    la carpeta plana del módulo (modules/<módulo>/views/…), la
+ *    convención de Blog, que con un solo CPT nunca necesitó
+ *    subcarpeta.
  * 4. Fallback genérico: cualquier Página u otro contenido nativo sin
  *    dueño ('core/views/pagina'), o nada ('core/views/sin-contenido').
  *
@@ -179,14 +185,31 @@ class ViewResolver
         }
 
         if (is_singular($post_type)) {
-            return $this->view_if_exists($slug, 'single');
+            return $this->content_view_if_exists($slug, $post_type, 'single');
         }
 
         if (is_post_type_archive($post_type) || ($post_type === 'post' && is_home())) {
-            return $this->view_if_exists($slug, 'archive');
+            return $this->content_view_if_exists($slug, $post_type, 'archive');
         }
 
         return null;
+    }
+
+    /**
+     * Como view_if_exists(), pero para la vista de un post_type
+     * concreto: prueba primero dentro de la subcarpeta propia del CPT
+     * (modules/<módulo>/<post_type>/views/…) y, si no existe ahí, cae
+     * a la carpeta plana del módulo. No rompe nada de lo ya instalado
+     * — Blog nunca tuvo esa subcarpeta, así que siempre cae al mismo
+     * lugar de antes.
+     *
+     * @return string|null
+     */
+    private function content_view_if_exists($module_slug, $post_type, $view_name)
+    {
+        $scoped = $this->view_if_exists("{$module_slug}/{$post_type}", $view_name);
+
+        return $scoped ?: $this->view_if_exists($module_slug, $view_name);
     }
 
     private function view_if_exists($module_slug, $view_name)

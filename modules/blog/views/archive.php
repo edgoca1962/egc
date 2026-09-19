@@ -42,7 +42,7 @@ if (!defined('ABSPATH')) {
                             <?php
                             $actions = PostManagement::get_instance()->actions_for(get_the_ID());
                             if ($actions['can_edit'] || $actions['can_trash']) {
-                                include EGC_DIR . '/modules/blog/views/partials/post-actions.php';
+                                include EGC_DIR . '/core/views/partials/post-actions.php';
                             }
                             ?>
                         </div>

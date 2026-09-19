@@ -18,6 +18,28 @@ if (!defined('ABSPATH')) {
  * La capacidad marcadora es 'edit_users': es la que AdminGuard/las
  * vistas usan para distinguir "este usuario es Administrador General"
  * sin comparar el nombre del rol (ver UserScope y MenuResolver).
+ *
+ * Crear el rol `administrador_general` con `add_role()` no se lo
+ * asigna a nadie — es solo el rol que un módulo de Gestión de usuarios
+ * podría darle a una persona puntual. El super usuario real del sitio
+ * (`manage_options`, la misma capacidad que ya usa AdminGuard para
+ * definir quién entra a wp-admin) es una cuenta aparte, normalmente el
+ * rol nativo `administrator` de WordPress — y ese rol NO tiene de
+ * fábrica las capacidades que cada módulo va agregando (`post` es la
+ * única excepción, porque WordPress ya lo trae resuelto). Sin nada
+ * más, el super usuario se queda afuera de cualquier CPT nuevo: ve el
+ * framework como si fuera Administrador General en nuestra propia
+ * lógica (`UserScope::is_general_admin()`), pero WordPress, con sus
+ * propias capacidades nativas, no lo deja ni ver el CPT en el menú de
+ * wp-admin ni pasar un `current_user_can('edit_post', $id)` real.
+ *
+ * `grant_to_super_user()` cierra esa brecha sin comparar nombres de
+ * rol (que violaría AUTORIZACIÓN): a quien tenga `manage_options` se
+ * le agregan, vía el filtro nativo `user_has_cap`, las mismas
+ * capacidades que ya calcula `build_capabilities()` — el mismo cálculo
+ * que ya usa `sync()`, no uno nuevo. Cualquier módulo que se agregue
+ * después queda cubierto automáticamente, sin tocar esta clase de
+ * nuevo.
  */
 class AdminGeneralRole
 {
@@ -31,6 +53,25 @@ class AdminGeneralRole
     {
         add_action('after_switch_theme', [$this, 'sync']);
         add_action('admin_init', [$this, 'sync']);
+        add_filter('user_has_cap', [$this, 'grant_to_super_user'], 10, 4);
+    }
+
+    /**
+     * @param array $allcaps Capacidades ya resueltas para $user.
+     * @return array Las mismas, con las de `build_capabilities()`
+     *               agregadas si $user es el super usuario del sitio.
+     */
+    public function grant_to_super_user($allcaps, $caps, $args, $user)
+    {
+        if (empty($allcaps['manage_options'])) {
+            return $allcaps;
+        }
+
+        foreach ($this->build_capabilities() as $capability => $granted) {
+            $allcaps[$capability] = $granted;
+        }
+
+        return $allcaps;
     }
 
     /**

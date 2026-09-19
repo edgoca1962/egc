@@ -232,17 +232,19 @@ class PostManagement
      * current_user_can() en cada vista. articulos-pendientes.php no lo
      * usa: esa pantalla no edita ni elimina, solo publica.
      *
-     * @return array{id:int, can_edit:bool, edit_url:string, can_trash:bool}
+     * @return array{id:int, can_edit:bool, edit_url:string, can_trash:bool, trash_action:string, nonce_name:string}
      */
     public function actions_for($post_id)
     {
         $edit_url = add_query_arg('post_id', $post_id, $this->url_editar());
 
         return [
-            'id'        => $post_id,
-            'can_edit'  => current_user_can('edit_post', $post_id),
-            'edit_url'  => $this->with_return_here($edit_url),
-            'can_trash' => current_user_can('delete_post', $post_id),
+            'id'           => $post_id,
+            'can_edit'     => current_user_can('edit_post', $post_id),
+            'edit_url'     => $this->with_return_here($edit_url),
+            'can_trash'    => current_user_can('delete_post', $post_id),
+            'trash_action' => self::ACTION_TRASH,
+            'nonce_name'   => self::NONCE_NAME,
         ];
     }
 

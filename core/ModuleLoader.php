@@ -104,6 +104,16 @@ class ModuleLoader
      * en minúsculas. Dinámico, no PSR-4 de Composer, porque los
      * módulos se descubren en tiempo de ejecución (ver docblock de la
      * clase).
+     *
+     * Un módulo puede organizar sus clases en subcarpetas (por ejemplo
+     * `modules/sgf/billetera/Billetera.php`, para agrupar cada CPT del
+     * módulo en la suya propia). La convención del proyecto es que toda
+     * carpeta va en minúscula — igual que `modules/` y `modules/blog/`
+     * ya lo están — así que cada segmento intermedio del namespace se
+     * pasa a minúsculas al resolver la carpeta. El último segmento (el
+     * nombre de la clase en sí) se deja tal cual, porque ese sí nombra
+     * un archivo (`Billetera.php`, no `billetera.php`), igual que ya
+     * pasa con `PostManagement.php` en Blog.
      */
     private function register_autoloading()
     {
@@ -113,11 +123,15 @@ class ModuleLoader
                 return;
             }
 
-            $relative = substr($class, strlen($prefix));
-            $parts    = explode('\\', $relative);
-            $module   = strtolower(array_shift($parts));
+            $relative   = substr($class, strlen($prefix));
+            $parts      = explode('\\', $relative);
+            $class_name = array_pop($parts);
+            $module     = strtolower(array_shift($parts));
+            $subcarpetas = array_map('strtolower', $parts);
 
-            $path = EGC_DIR . '/modules/' . $module . '/' . implode('/', $parts) . '.php';
+            $segmentos = array_merge([$module], $subcarpetas, [$class_name]);
+            $path = EGC_DIR . '/modules/' . implode('/', $segmentos) . '.php';
+
             if (file_exists($path)) {
                 require $path;
             }
