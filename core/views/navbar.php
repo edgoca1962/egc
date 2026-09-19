@@ -4,6 +4,7 @@ use EGC\Core\Account;
 use EGC\Core\BootstrapNavWalker;
 use EGC\Core\LoginPage;
 use EGC\Core\MenuResolver;
+use EGC\Core\Menus;
 use EGC\Core\PasswordChange;
 use EGC\Core\UserManagement;
 use EGC\Core\UserRegistration;
@@ -58,8 +59,23 @@ $locations = MenuResolver::get_instance()->locations();
             <ul class="navbar-nav">
                 <li class="nav-item dropdown">
                     <?php if (is_user_logged_in()) : ?>
+                        <?php
+                        /**
+                         * data-bs-auto-close="outside": desde que este
+                         * dropdown puede contener sus propios toggles
+                         * anidados (los bloques de Módulo/Autor-Contributor,
+                         * y el menú "Administrador general" si tiene
+                         * hijos), un clic en uno de esos toggles ocurre
+                         * "adentro" de este dropdown-menu — sin "outside",
+                         * el comportamiento por default de Bootstrap (true)
+                         * cierra este dropdown en ese mismo clic, antes de
+                         * que el submenú anidado llegue a mostrarse. Mismo
+                         * criterio que ya aplica BootstrapNavWalker para
+                         * cualquier ítem con hijos.
+                         */
+                        ?>
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button"
-                           data-bs-toggle="dropdown" aria-expanded="false">
+                           data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
                             <img src="<?php echo esc_url(get_avatar_url(get_current_user_id())); ?>" alt=""
                                  width="28" height="28" class="rounded-circle border border-2 border-primary bg-primary" style="object-fit:cover;">
                         </a>
@@ -74,23 +90,53 @@ $locations = MenuResolver::get_instance()->locations();
                                     <?php esc_html_e('Cambio contraseña', 'egc'); ?>
                                 </a>
                             </li>
-                            <?php if (UserScope::get_instance()->is_general_admin() || !empty(UserScope::get_instance()->managed_post_types())) : ?>
+                            <?php
+                            /**
+                             * Los tres bloques de administración del
+                             * dropdown, mutuamente excluyentes entre "General"
+                             * y el resto (ver UserScope::modulo_links()):
+                             * un Administrador General ve el menú nativo
+                             * completo y nada más; cualquier otro usuario ve,
+                             * cada uno por separado si corresponde, los CPT
+                             * que administra y los CPT donde tiene su propio
+                             * CRUD — ambos calculados recorriendo los módulos
+                             * presentes, sin que ningún módulo tenga que
+                             * declarar ni escribir nada para aparecer acá.
+                             */
+                            $scope            = UserScope::get_instance();
+                            $es_admin_general = $scope->is_general_admin();
+                            $modulo_grupos    = $scope->modulo_links();
+                            $autor_grupos     = $scope->autor_links();
+                            ?>
+                            <?php if ($es_admin_general || !empty($modulo_grupos)) : ?>
                                 <li>
                                     <a class="dropdown-item" href="<?php echo esc_url(UserManagement::get_instance()->url()); ?>">
                                         <?php esc_html_e('Gestión de usuarios', 'egc'); ?>
                                     </a>
                                 </li>
                             <?php endif; ?>
-                            <?php
-                            /**
-                             * Cada módulo cuelga acá sus propios <li> de
-                             * administración (ver PostManagement::render_navbar_link()
-                             * en el Blog) — el Core no conoce ni referencia
-                             * ningún módulo puntual, así que sacar la carpeta
-                             * de un módulo no deja nada roto acá.
-                             */
-                            do_action('egc_navbar_admin_dropdown');
-                            ?>
+
+                            <?php if ($es_admin_general) : ?>
+                                <?php
+                                wp_nav_menu([
+                                    'theme_location' => Menus::LOC_ADMIN_GENERAL,
+                                    'container'      => false,
+                                    'items_wrap'     => '%3$s',
+                                    'walker'         => new BootstrapNavWalker(true),
+                                    'fallback_cb'    => false,
+                                ]);
+                                ?>
+                            <?php endif; ?>
+
+                            <?php if (!empty($modulo_grupos)) : ?>
+                                <?php $grupos = $modulo_grupos; ?>
+                                <?php include EGC_DIR . '/core/views/partials/navbar-dropdown-modulo.php'; ?>
+                            <?php endif; ?>
+
+                            <?php if (!empty($autor_grupos)) : ?>
+                                <?php $grupos = $autor_grupos; ?>
+                                <?php include EGC_DIR . '/core/views/partials/navbar-dropdown-modulo.php'; ?>
+                            <?php endif; ?>
                             <li>
                                 <hr class="dropdown-divider">
                             </li>

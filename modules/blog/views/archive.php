@@ -10,22 +10,22 @@ if (!defined('ABSPATH')) {
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="mb-0"><?php esc_html_e('Blog', 'egc'); ?></h1>
 
-        <?php if (current_user_can('edit_posts')) : ?>
-            <a class="btn btn-primary"
-               href="<?php echo esc_url(PostManagement::get_instance()->url_editar()); ?>"
-               aria-label="<?php esc_attr_e('Crear artículo', 'egc'); ?>"
-               title="<?php esc_attr_e('Crear artículo', 'egc'); ?>">
+        <?php if (current_user_can('edit_posts')): ?>
+            <a class="btn btn-primary" href="<?php echo esc_url(PostManagement::get_instance()->url_editar()); ?>"
+                aria-label="<?php esc_attr_e('Crear artículo', 'egc'); ?>"
+                title="<?php esc_attr_e('Crear artículo', 'egc'); ?>">
                 <i class="bi bi-plus-lg" aria-hidden="true"></i>
             </a>
         <?php endif; ?>
     </div>
 
-    <?php if (have_posts()) : ?>
+    <?php if (have_posts()): ?>
         <div class="row g-4">
-            <?php while (have_posts()) : the_post(); ?>
+            <?php while (have_posts()):
+                the_post(); ?>
                 <div class="col-md-6 col-lg-4">
-                    <div class="card h-100">
-                        <?php if (has_post_thumbnail()) : ?>
+                    <div class="card h-100 b_color">
+                        <?php if (has_post_thumbnail()): ?>
                             <?php the_post_thumbnail('medium', ['class' => 'card-img-top']); ?>
                         <?php endif; ?>
                         <div class="card-body d-flex flex-column">
@@ -36,7 +36,8 @@ if (!defined('ABSPATH')) {
                                 // (con su paginación) — ver PostManagement::with_return_here().
                                 $post_url = PostManagement::get_instance()->with_return_here(get_permalink());
                                 ?>
-                                <a class="text-decoration-none" href="<?php echo esc_url($post_url); ?>"><?php the_title(); ?></a>
+                                <a class="text-decoration-none"
+                                    href="<?php echo esc_url($post_url); ?>"><?php the_title(); ?></a>
                             </h2>
                             <p class="card-text flex-grow-1"><?php the_excerpt(); ?></p>
                             <?php
@@ -54,7 +55,7 @@ if (!defined('ABSPATH')) {
         <div class="mt-4">
             <?php the_posts_pagination(); ?>
         </div>
-    <?php else : ?>
+    <?php else: ?>
         <p><?php esc_html_e('Todavía no hay publicaciones.', 'egc'); ?></p>
     <?php endif; ?>
 </div>

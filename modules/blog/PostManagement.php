@@ -64,27 +64,40 @@ class PostManagement
         add_action('admin_post_' . self::ACTION_TRASH, [$this, 'handle_trash']);
         add_action('admin_post_' . self::ACTION_PUBLICAR, [$this, 'handle_publicar']);
 
-        // Core dispara egc_navbar_admin_dropdown en el mismo <li> donde
-        // vive "Gestión de usuarios", para que un módulo pueda sumar su
-        // propio link sin que navbar.php (Core) tenga que conocer al
-        // Blog — si esta carpeta se saca, este hook simplemente deja de
-        // engancharse, nada en Core queda referenciando una clase que
-        // ya no existe.
-        add_action('egc_navbar_admin_dropdown', [$this, 'render_navbar_link']);
+        // El enlace al archive de 'post' en el dropdown del avatar ya
+        // sale solo (UserScope::modulo_links()/autor_links() lo arman
+        // genéricamente a partir del manifest) — este filtro solo suma
+        // "Artículos pendientes de publicar", que no es el archive de
+        // ningún CPT sino una Página propia de Blog, así que no hay
+        // forma de que el mecanismo genérico la infiera sola. Si esta
+        // carpeta se saca, el filtro simplemente deja de engancharse,
+        // nada en Core queda referenciando una clase que ya no existe.
+        add_filter('egc_dropdown_items_post', [$this, 'add_navbar_items'], 10, 2);
     }
 
     /**
-     * Puente para el <li> del dropdown del navbar: decide si
-     * corresponde mostrarlo (solo a quien administra el recurso
-     * 'post'), la vista (el partial) solo pinta.
+     * @param  array  $items Lo que UserScope::links_by() ya armó para
+     *                       'post' en este bloque.
+     * @param  string $tier  'modulo' o 'autor' — la cola de revisión es
+     *                       una tarea de administración, así que solo
+     *                       se suma en 'modulo'. Sin chequeo de
+     *                       capacidad acá: si este filtro se está
+     *                       llamando para 'modulo', UserScope ya
+     *                       comprobó manages('post') antes de llegar acá.
+     * @return array
      */
-    public function render_navbar_link()
+    public function add_navbar_items($items, $tier)
     {
-        if (!UserScope::get_instance()->manages('post')) {
-            return;
+        if ($tier !== 'modulo') {
+            return $items;
         }
 
-        include EGC_DIR . '/modules/blog/views/partials/navbar-admin-link.php';
+        $items[] = [
+            'label' => __('Artículos pendientes de publicar', 'egc'),
+            'url'   => $this->url_pendientes(),
+        ];
+
+        return $items;
     }
 
     public function url_editar()

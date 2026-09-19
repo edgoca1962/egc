@@ -111,7 +111,7 @@ class ViewResolver
             return null;
         }
 
-        $post_type = get_post_type() ?: 'post';
+        $post_type = $this->current_post_type();
 
         foreach (ModuleLoader::get_instance()->discover() as $slug => $manifest) {
             if (!in_array($post_type, $this->post_types_of($manifest), true)) {
@@ -129,6 +129,40 @@ class ViewResolver
     /**
      * @return array<string,string> slug de Página => vista propia.
      */
+    /**
+     * El post_type que está pidiendo la URL actual, según la propia
+     * consulta — no según el primer resultado que haya encontrado.
+     *
+     * A propósito NO se usa `get_post_type()` sin argumento: esa
+     * función lee el global `$post`, que WordPress solo llena con el
+     * primer resultado de la consulta (`$wp_query->post`). En un
+     * archive de un CPT con cero registros — el caso de Billetera
+     * recién creado, antes de que exista la primera — ese global queda
+     * vacío, `get_post_type()` devuelve `false`, y todo el mecanismo de
+     * `ViewResolver` terminaba creyendo que el post_type era `post`
+     * (por el resguardo `?: 'post'`), perdiendo por completo la vista
+     * del módulo dueño aunque estuviera bien ubicada en disco. Con
+     * Blog el bug quedaba oculto porque su post_type real también es
+     * `post` — el resguardo equivocado coincidía con la respuesta
+     * correcta por casualidad.
+     *
+     * `get_query_var('post_type')` en cambio refleja lo que WordPress
+     * resolvió al interpretar la URL (`WP_Query::parse_query()`),
+     * antes de ejecutar la consulta — es correcto haya o no resultados.
+     *
+     * @return string
+     */
+    private function current_post_type()
+    {
+        $post_type = get_query_var('post_type');
+
+        if (is_array($post_type)) {
+            $post_type = reset($post_type);
+        }
+
+        return $post_type ?: 'post';
+    }
+
     private function core_page_views()
     {
         return [
@@ -177,7 +211,7 @@ class ViewResolver
             return null;
         }
 
-        $post_type = get_post_type() ?: 'post';
+        $post_type = $this->current_post_type();
         $slug      = $this->current_module_slug();
 
         if (!$slug) {

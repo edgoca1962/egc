@@ -67,6 +67,35 @@ class UserScope
     }
 
     /**
+     * @return bool Si el usuario actual tiene su propio CRUD sobre
+     *              este post_type (autor/contributor: puede crear y
+     *              editar lo suyo) pero NO lo administra. Es la
+     *              contraparte de manages(), no una condición
+     *              independiente — si ya administra el recurso esto es
+     *              false, para que un mismo post_type nunca cuente a
+     *              la vez como "administrado" y como "propio" para el
+     *              mismo usuario (el bloque de Autor/Contributor del
+     *              dropdown del avatar depende de esta exclusión).
+     *
+     * Igual que manages(), lee la capacidad real desde
+     * get_post_type_object($post_type)->cap — nunca compara nombres de
+     * rol ni reconstruye el nombre de la capacidad a mano.
+     */
+    public function authors($post_type)
+    {
+        if ($this->manages($post_type)) {
+            return false;
+        }
+
+        $post_type_object = get_post_type_object($post_type);
+        if (!$post_type_object) {
+            return false;
+        }
+
+        return current_user_can($post_type_object->cap->edit_posts);
+    }
+
+    /**
      * @return string[] post_types (de todos los manifests) que el
      *                   usuario actual administra. Es lo que
      *                   UserManagement usa para saber qué columnas de
@@ -85,6 +114,108 @@ class UserScope
         }
 
         return array_values(array_unique($managed));
+    }
+
+    /**
+     * @return array<int, array{modulo: string, items: array<int, array{label: string, url: string}>}>
+     *         Enlaces para el bloque "Administrador de Módulo" del
+     *         dropdown del avatar: por cada módulo presente donde el
+     *         usuario administra al menos un CPT, su nombre y la lista
+     *         de esos CPT (etiqueta + URL de su archive) — ambos datos
+     *         nativos de WordPress (get_post_type_object()->labels,
+     *         get_post_type_archive_link()), leídos a partir de lo que
+     *         cada manifest ya declaró en `post_types`. Ningún módulo
+     *         tiene que escribir código ni declarar nada extra para
+     *         aparecer acá.
+     *
+     *         Vacío para el Administrador General: ese caso ya lo
+     *         cubre el menú nativo "Administrador general" (ver
+     *         Menus::LOC_ADMIN_GENERAL) y no hace falta, además, un
+     *         listado con todos los módulos — por eso este método NO
+     *         se apoya en manages() tal cual (que da true para todo
+     *         con el Administrador General), sino que excluye ese caso
+     *         explícitamente.
+     */
+    public function modulo_links()
+    {
+        if ($this->is_general_admin()) {
+            return [];
+        }
+
+        return $this->links_by([$this, 'manages'], 'modulo');
+    }
+
+    /**
+     * @return array<int, array{modulo: string, items: array<int, array{label: string, url: string}>}>
+     *         Igual forma que modulo_links(), pero para el bloque
+     *         "Autor/Contributor": los CPT donde el usuario tiene su
+     *         propio CRUD sin administrar el recurso. Se apoya en
+     *         authors(), que ya excluye por su cuenta al Administrador
+     *         General y a quien administra ese CPT puntual — acá no
+     *         hace falta ningún resguardo adicional.
+     */
+    public function autor_links()
+    {
+        return $this->links_by([$this, 'authors'], 'autor');
+    }
+
+    /**
+     * Recorre los módulos presentes y arma, agrupados por módulo, los
+     * CPT de cada uno para los que $condition($post_type) es true.
+     * Compartido por modulo_links() y autor_links() — la única
+     * diferencia entre esos dos bloques es qué condición de
+     * autorización aplican por CPT, no cómo se recorre ni se agrupa.
+     *
+     * Por cada post_type que calificó, se aplica el filtro
+     * `egc_dropdown_items_{$post_type}` — el punto de extensión para
+     * cuando un módulo necesita sumar, a su propio grupo, un enlace que
+     * no sale de un archive nativo de CPT. Blog lo usa para "Artículos
+     * pendientes de publicar": esa pantalla es una Página propia del
+     * módulo (una cola de revisión), no el archive de `post`, así que
+     * no hay forma de que este método genérico la infiera solo. $tier
+     * ('modulo' o 'autor') le llega al filtro para que cada módulo
+     * decida en cuál de los dos bloques corresponde sumar el suyo — acá
+     * no se decide nada de autorización, eso es responsabilidad de
+     * quien se cuelga del filtro.
+     *
+     * @param  callable $condition function(string $post_type): bool
+     * @param  string   $tier      'modulo' o 'autor', para el filtro de extensión
+     * @return array<int, array{modulo: string, items: array<int, array{label: string, url: string}>}>
+     */
+    private function links_by(callable $condition, $tier)
+    {
+        $groups = [];
+
+        foreach (ModuleLoader::get_instance()->discover() as $manifest) {
+            $items = [];
+
+            foreach ($this->post_types_of($manifest) as $post_type) {
+                if (!$condition($post_type)) {
+                    continue;
+                }
+
+                $post_type_object = get_post_type_object($post_type);
+                $url              = get_post_type_archive_link($post_type);
+
+                if ($post_type_object && $url) {
+                    $items[] = [
+                        'label' => $post_type_object->labels->name,
+                        'url'   => $url,
+                    ];
+                }
+
+                $items = apply_filters("egc_dropdown_items_{$post_type}", $items, $tier);
+            }
+
+            if ($items) {
+                $groups[] = [
+                    'modulo' => $manifest['nombre'] ?? '',
+                    'items'  => $items,
+                ];
+            }
+        }
+
+        return $groups;
     }
 
     /**

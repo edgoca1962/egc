@@ -15,6 +15,15 @@ if (!defined('ABSPATH')) {
  * Como Core::get_instance() ya corre dentro de after_setup_theme, este
  * constructor registra los menús directamente (no vuelve a colgarse
  * del mismo hook), igual que Setup.
+ *
+ * Ya NO existe una ubicación nativa "Administrador de módulo": esos
+ * enlaces pasaron a ser dinámicos (ver UserScope::modulo_links() /
+ * UserScope::autor_links() y el dropdown del avatar en navbar.php) —
+ * varían según los módulos presentes y el rol del usuario en cada uno,
+ * algo que un menú armado a mano en Apariencia > Menús no puede
+ * expresar. "Administrador general" sí sigue siendo un menú nativo
+ * porque su contenido es genuinamente fijo: quien lo ve administra
+ * todo, sin depender de qué módulos estén instalados.
  */
 class Menus
 {
@@ -24,14 +33,11 @@ class Menus
 
     const LOC_ADMIN_GENERAL = 'egc_administrador_general';
 
-    const LOC_ADMIN_MODULO = 'egc_administrador_modulo';
-
     private function __construct()
     {
         register_nav_menus([
             self::LOC_PUBLICO       => __('Público (navbar)', 'egc'),
             self::LOC_ADMIN_GENERAL => __('Administrador general (navbar)', 'egc'),
-            self::LOC_ADMIN_MODULO  => __('Administrador de módulo (navbar)', 'egc'),
         ]);
     }
 }

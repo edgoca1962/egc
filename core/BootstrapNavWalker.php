@@ -27,9 +27,24 @@ if (!defined('ABSPATH')) {
  *   de nivel 0): sin esto, un clic en el toggle de un submenú hijo
  *   ocurre "adentro" del dropdown-menu del padre, y el auto-close por
  *   default de Bootstrap cierra el padre entero en cada clic interno.
+ *
+ * $embed_in_dropdown: true cuando este wp_nav_menu() no va contra la
+ * barra (nivel 0 real) sino ya adentro de otro <ul class="dropdown-menu">
+ * — el caso del menú "Administrador general" dentro del dropdown del
+ * avatar (ver navbar.php). En ese caso el nivel 0 de ESTE menú ya está
+ * un nivel adentro visualmente: sus ítems van con "dropdown-item" (no
+ * "nav-link"), y si alguno tiene hijos abre con "dropstart" (no hacia
+ * abajo) — mismo criterio que ya se aplica a partir del nivel 1.
  */
 class BootstrapNavWalker extends \Walker_Nav_Menu
 {
+    private $embed_in_dropdown;
+
+    public function __construct($embed_in_dropdown = false)
+    {
+        $this->embed_in_dropdown = $embed_in_dropdown;
+    }
+
     public function start_lvl(&$output, $depth = 0, $args = null)
     {
         $indent = str_repeat("\t", $depth + 1);
@@ -47,7 +62,7 @@ class BootstrapNavWalker extends \Walker_Nav_Menu
         $classes = empty($item->classes) ? [] : (array) $item->classes;
 
         $has_children = in_array('menu-item-has-children', $classes, true);
-        $is_top_level = $depth === 0;
+        $is_top_level = $depth === 0 && !$this->embed_in_dropdown;
         $is_active    = array_intersect(
             ['current-menu-item', 'current-menu-parent', 'current-menu-ancestor'],
             $classes
