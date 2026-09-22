@@ -39,13 +39,31 @@ if (!defined('ABSPATH')) {
  * capacidades primitivas a partir del plural, no de "post": no existe
  * `edit_posts` para este CPT, existe `edit_billeteras`. Por eso las
  * claves de abajo van con el plural del recurso, no con las de Blog.
+ *
+ * `libro` (ver modules/sgf/libro/Libro.php) se suma con el mismo
+ * criterio: capability_type propio (`libro`/`libros`), así que sus
+ * capacidades son `edit_libros`/`edit_others_libros`/etc., no
+ * `edit_billeteras`. `sgf_editor` y `sgf_autor` reciben las de los dos
+ * recursos a la vez — un movimiento de Libro siempre cuelga de una
+ * Billetera (su `post_parent`), así que administrar o ser autor de
+ * billeteras y de sus movimientos es, en la práctica, un solo alcance,
+ * no dos independientes.
+ *
+ * Por eso `libro` NO tiene su propia entrada en `assignable_roles`:
+ * si la tuviera, "Gestión de usuarios" (core/UserManagement.php)
+ * mostraría una columna aparte para asignar el rol de Libro, separada
+ * de la de Billetera, obligando a asignar el mismo rol dos veces por
+ * usuario y pudiendo quedar desincronizadas entre sí. Con una sola
+ * entrada (`billetera`) que ya cubre ambos recursos alcanza, y
+ * `UserManagement::view_state()` omite de la tabla cualquier post_type
+ * managed sin `assignable_roles` propio — ver ese archivo.
  */
 return [
     'nombre' => __('Sistema de Gestión Financiera', 'egc'),
 
     'sigla' => 'SGF',
 
-    'post_types' => ['billetera'],
+    'post_types' => ['billetera', 'libro'],
 
     'roles' => [
         'sgf_editor' => [
@@ -62,6 +80,16 @@ return [
                 'delete_others_billeteras'    => true,
                 'delete_published_billeteras' => true,
                 'delete_private_billeteras'   => true,
+                'edit_libros'                 => true,
+                'edit_others_libros'          => true,
+                'edit_published_libros'       => true,
+                'edit_private_libros'         => true,
+                'publish_libros'              => true,
+                'read_private_libros'         => true,
+                'delete_libros'               => true,
+                'delete_others_libros'        => true,
+                'delete_published_libros'     => true,
+                'delete_private_libros'       => true,
             ],
         ],
         'sgf_autor' => [
@@ -73,6 +101,11 @@ return [
                 'publish_billeteras'          => true,
                 'delete_billeteras'           => true,
                 'delete_published_billeteras' => true,
+                'edit_libros'                 => true,
+                'edit_published_libros'       => true,
+                'publish_libros'              => true,
+                'delete_libros'               => true,
+                'delete_published_libros'     => true,
             ],
         ],
     ],

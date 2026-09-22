@@ -26,6 +26,32 @@ if (!defined('ABSPATH')) {
  * el super usuario) pueden verla — eso exige scope_archive_query() (el
  * listado) y el chequeo de propietario en guard_single() (el detalle),
  * ninguno de los dos necesario en Blog.
+ *
+ * Quien administra el recurso ve el listado de TODOS los usuarios sin
+ * filtrar por defecto (scope_archive_query() no acota nada para
+ * quien administra) — eso incluye al superusuario, porque
+ * UserScope::manages() no lo trata como caso especial, resuelve todo
+ * con current_user_can(). El filtro por usuario de archive.php
+ * (?usuario=, ver archive_usuario_opciones()) existe para sgf_editor y
+ * Administrador General, que administran el recurso pero — a
+ * diferencia del superusuario — AdminGuard los deja afuera de
+ * wp-admin, así que no tienen el filtro de autor nativo de la lista
+ * de wp-admin como alternativa. Al superusuario, que sí entra a
+ * wp-admin, no hace falta construirle nada acá: ya tiene ese mismo
+ * filtro gratis en la lista nativa de Billeteras (show_ui => true), y
+ * duplicarlo en el front-end sería una segunda fuente de verdad para
+ * algo que WordPress ya resuelve.
+ *
+ * El atajo "Mis billeteras" del `<select>` (ver view_state_archive())
+ * usa `UserScope::is_general_admin()`, no `manages()`: a propósito
+ * deja afuera a sgf_editor (que administra Billetera vía
+ * edit_others_billeteras, pero no es Administrador General) — pedido
+ * explícito de Edwin. `is_general_admin()` es la misma capacidad
+ * marcadora (`edit_users`) que ya identifica a Administrador General
+ * en el resto del Core, y por diseño (ver el docblock de
+ * AdminGeneralRole) también cubre al superusuario si alguna vez
+ * navega el front-end en vez de wp-admin — no es un caso especial
+ * nuevo, es el mismo criterio que ya existía.
  */
 class BilleteraManagement
 {
@@ -165,6 +191,15 @@ class BilleteraManagement
      * fuerza acá. No logueado: 'author' => 0 (ningún autor real tiene
      * ese ID) como defensa adicional, aunque guard_archive() ya
      * redirige antes de que se llegue a pintar nada.
+     *
+     * Quien administra el recurso puede además acotar ese listado sin
+     * filtrar a un usuario puntual, con `?usuario=` (ver
+     * usuario_filtro_seleccionado() / archive_usuario_opciones()) — sin
+     * este filtro, admin general y sgf_editor no tienen ninguna forma
+     * de encontrar la billetera de un usuario puntual una vez que hay
+     * varios, porque a diferencia del superusuario, a ellos
+     * AdminGuard los deja afuera de wp-admin (que sí trae un filtro de
+     * autor nativo) — ver la nota en la clase.
      */
     public function scope_archive_query($query)
     {
@@ -181,11 +216,71 @@ class BilleteraManagement
             return;
         }
 
-        if (UserScope::get_instance()->manages(Billetera::POST_TYPE)) {
+        if (!UserScope::get_instance()->manages(Billetera::POST_TYPE)) {
+            $query->set('author', get_current_user_id());
             return;
         }
 
-        $query->set('author', get_current_user_id());
+        $usuario_filtro = $this->usuario_filtro_seleccionado();
+        if ($usuario_filtro) {
+            $query->set('author', $usuario_filtro);
+        }
+    }
+
+    /**
+     * El `?usuario=` de la URL, solo si es un ID de usuario real — 0 en
+     * cualquier otro caso (sin filtro, o un valor inventado). Lo usan
+     * tanto scope_archive_query() (para acotar la consulta) como
+     * view_state_archive() (para marcar la opción seleccionada en el
+     * `<select>`).
+     */
+    private function usuario_filtro_seleccionado()
+    {
+        $user_id = isset($_GET['usuario']) ? absint($_GET['usuario']) : 0;
+
+        return ($user_id && get_userdata($user_id)) ? $user_id : 0;
+    }
+
+    /**
+     * Usuarios que tienen al menos una billetera propia, correo =>
+     * para pintar el `<select>` de archive.php — no "todos los usuarios
+     * del sitio" (la mayoría no tiene ninguna billetera, sería ruido) ni
+     * "todos los que tienen rol de SGF" (alguien con el rol recién
+     * asignado y todavía sin billeteras no tiene nada que filtrar).
+     *
+     * Sin `get_posts()` con `'fields' => 'ids'` no hay forma nativa de
+     * pedirle a WordPress directamente "los post_author distintos de
+     * este post_type" (WP_Query no tiene ese modo) — de ahí el loop
+     * leyendo `post_author` de cada ID.
+     *
+     * @return array<int,string> user_id => user_email, ordenado por email.
+     */
+    private function archive_usuario_opciones()
+    {
+        $ids = get_posts([
+            'post_type'      => Billetera::POST_TYPE,
+            'post_status'    => ['publish', 'pending'],
+            'posts_per_page' => -1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+        ]);
+
+        $usuarios = [];
+        foreach ($ids as $post_id) {
+            $user_id = (int) get_post_field('post_author', $post_id);
+            if ($user_id === 0 || isset($usuarios[$user_id])) {
+                continue;
+            }
+
+            $user = get_userdata($user_id);
+            if ($user) {
+                $usuarios[$user_id] = $user->user_email;
+            }
+        }
+
+        asort($usuarios);
+
+        return $usuarios;
     }
 
     /**
@@ -250,9 +345,19 @@ class BilleteraManagement
      */
     public function view_state_archive()
     {
+        $puede_filtrar = UserScope::get_instance()->manages(Billetera::POST_TYPE);
+
         return [
-            'error'   => $this->message('error'),
-            'success' => (bool) $this->message('ok'),
+            'error'                    => $this->message('error'),
+            'success'                  => (bool) $this->message('ok'),
+            'can_filter_by_usuario'    => $puede_filtrar,
+            'usuario_opciones'         => $puede_filtrar ? $this->archive_usuario_opciones() : [],
+            'usuario_seleccionado'     => $this->usuario_filtro_seleccionado(),
+            // Atajo "Mis billeteras": solo para Administrador General,
+            // no para sgf_editor (ver el docblock de la clase). Nunca
+            // el usuario_id actual a secas: get_current_user_id() ya
+            // alcanza sin agregar otra clave, se resuelve en la vista.
+            'es_administrador_general' => UserScope::get_instance()->is_general_admin(),
         ];
     }
 

@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 $state = UserManagement::get_instance()->view_state();
 ?>
 <div class="container py-5">
+    <h1 class="h3 mb-4"><?php esc_html_e('Gestión de usuarios', 'egc'); ?></h1>
 
     <?php if ($state['success']): ?>
         <div class="alert alert-success"><?php esc_html_e('Cambio guardado.', 'egc'); ?></div>
@@ -28,11 +29,14 @@ $state = UserManagement::get_instance()->view_state();
                         <th><?php esc_html_e('Correo', 'egc'); ?></th>
                         <?php if ($state['can_manage_status']): ?>
                             <th><?php esc_html_e('Estado', 'egc'); ?></th>
-                            <th><?php esc_html_e('Administrador general', 'egc'); ?></th>
+                            <th><?php esc_html_e('Admin. Gral.', 'egc'); ?></th>
                         <?php endif; ?>
                         <?php foreach ($state['post_types'] as $post_type => $data): ?>
                             <th><?php echo esc_html($data['label']); ?></th>
                         <?php endforeach; ?>
+                        <?php if (has_action('egc_user_row_actions')): ?>
+                            <th></th>
+                        <?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
@@ -60,8 +64,10 @@ $state = UserManagement::get_instance()->view_state();
                                                     </option>
                                                 <?php endforeach; ?>
                                             </select>
-                                            <button type="submit" class="btn btn-sm btn-outline-primary">
-                                                <?php esc_html_e('Guardar', 'egc'); ?>
+                                            <button type="submit" class="btn btn-sm btn-outline-primary"
+                                                title="<?php esc_attr_e('Guardar', 'egc'); ?>"
+                                                aria-label="<?php esc_attr_e('Guardar', 'egc'); ?>">
+                                                <i class="bi bi-bookmark-fill" aria-hidden="true"></i>
                                             </button>
                                         </form>
                                     <?php endif; ?>
@@ -73,11 +79,17 @@ $state = UserManagement::get_instance()->view_state();
                                         <input type="hidden" name="user_id" value="<?php echo esc_attr($user['id']); ?>">
                                         <input type="hidden" name="is_admin_general"
                                             value="<?php echo $user['is_admin_general'] ? '0' : '1'; ?>">
+                                        <?php
+                                        $admin_general_label = $user['is_admin_general']
+                                            ? __('Quitar administrador general', 'egc')
+                                            : __('Hacer administrador general', 'egc');
+                                        ?>
                                         <button type="submit"
-                                            class="btn btn-sm <?php echo $user['is_admin_general'] ? 'btn-outline-danger' : 'btn-outline-primary'; ?>">
-                                            <?php echo $user['is_admin_general']
-                                                ? esc_html__('Quitar administrador general', 'egc')
-                                                : esc_html__('Hacer administrador general', 'egc'); ?>
+                                            class="btn btn-sm <?php echo $user['is_admin_general'] ? 'btn-outline-danger' : 'btn-outline-primary'; ?>"
+                                            title="<?php echo esc_attr($admin_general_label); ?>"
+                                            aria-label="<?php echo esc_attr($admin_general_label); ?>">
+                                            <i class="bi <?php echo $user['is_admin_general'] ? 'bi-person-check-fill' : 'bi-person-fill'; ?>"
+                                                aria-hidden="true"></i>
                                         </button>
                                     </form>
                                 </td>
@@ -101,12 +113,34 @@ $state = UserManagement::get_instance()->view_state();
                                                 </option>
                                             <?php endforeach; ?>
                                         </select>
-                                        <button type="submit" class="btn btn-sm btn-outline-primary">
-                                            <?php esc_html_e('Guardar', 'egc'); ?>
+                                        <button type="submit" class="btn btn-sm btn-outline-primary"
+                                            title="<?php esc_attr_e('Guardar', 'egc'); ?>"
+                                            aria-label="<?php esc_attr_e('Guardar', 'egc'); ?>">
+                                            <i class="bi bi-bookmark-fill" aria-hidden="true"></i>
                                         </button>
                                     </form>
                                 </td>
                             <?php endforeach; ?>
+
+                            <?php if (has_action('egc_user_row_actions')): ?>
+                                <td>
+                                    <?php
+                                    /**
+                                     * Punto de extensión genérico: cualquier
+                                     * módulo presente puede engancharse acá
+                                     * para agregar sus propias acciones por
+                                     * usuario, sin que esta vista (ni
+                                     * UserManagement) sepa cuáles ni qué
+                                     * hacen — mismo mecanismo que
+                                     * egc_dropdown_items_{$post_type} ya usa
+                                     * Blog. Hoy solo lo usa SGF (sembrar o
+                                     * reiniciar categorías), ver
+                                     * modules/sgf/libro/Categoria.php.
+                                     */
+                                    do_action('egc_user_row_actions', $user['id']);
+                                    ?>
+                                </td>
+                            <?php endif; ?>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>

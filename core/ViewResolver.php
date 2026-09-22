@@ -20,7 +20,13 @@ if (!defined('ABSPATH')) {
  *    punto 1 pero por convención de nombre de archivo, para que un
  *    módulo no tenga que declarar nada: alcanza con crear
  *    modules/<slug>/views/<slug-de-la-página>.php. Es el mismo
- *    mecanismo que ya se usaba en el WP Modulado original.
+ *    mecanismo que ya se usaba en el WP Modulado original. Igual que
+ *    en el punto 3, primero se prueba dentro de la subcarpeta propia de
+ *    cada CPT del módulo (modules/<módulo>/<post_type>/views/…) y si no
+ *    está ahí, se cae a la carpeta plana — una Página como
+ *    "billetera-editar" pertenece a un CPT puntual de un módulo con más
+ *    de uno, así que sigue la misma convención de carpeta que ya usan
+ *    su single.php y su archive.php.
  * 3. El post_type actual (no "page"), si algún módulo lo declaró en
  *    `post_types` de su manifest (module_content_view()) — ese módulo
  *    es dueño de todo ese tipo de contenido, vista single o
@@ -102,8 +108,8 @@ class ViewResolver
                 return null;
             }
 
-            foreach (array_keys(ModuleLoader::get_instance()->discover()) as $slug) {
-                if ($this->view_if_exists($slug, $page->post_name)) {
+            foreach (ModuleLoader::get_instance()->discover() as $slug => $manifest) {
+                if ($this->page_view_if_exists($slug, $manifest, $page->post_name)) {
                     return $slug;
                 }
             }
@@ -193,8 +199,35 @@ class ViewResolver
         }
 
         $slug = $this->current_module_slug();
+        if (!$slug) {
+            return null;
+        }
 
-        return $slug ? $this->view_if_exists($slug, $page->post_name) : null;
+        return $this->page_view_if_exists($slug, ModuleLoader::get_instance()->discover()[$slug], $page->post_name);
+    }
+
+    /**
+     * Como content_view_if_exists(), pero para una Página nativa: la
+     * "billetera-editar" de SGF no es el single ni el archive de un CPT,
+     * es una Página que pertenece a uno de los CPT del módulo, así que
+     * sigue el mismo criterio de subcarpeta-primero-luego-plana en vez
+     * de buscar solo en la carpeta plana del módulo — de lo contrario
+     * un módulo con más de un CPT (como SGF, que ya usa esta subcarpeta
+     * para su single.php y su archive.php) nunca encontraría la vista de
+     * sus propias Páginas.
+     *
+     * @return string|null
+     */
+    private function page_view_if_exists($module_slug, $manifest, $page_slug)
+    {
+        foreach ($this->post_types_of($manifest) as $post_type) {
+            $scoped = $this->view_if_exists("{$module_slug}/{$post_type}", $page_slug);
+            if ($scoped) {
+                return $scoped;
+            }
+        }
+
+        return $this->view_if_exists($module_slug, $page_slug);
     }
 
     /**

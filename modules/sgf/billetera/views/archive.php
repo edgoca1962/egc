@@ -32,6 +32,44 @@ $state   = $manager->view_state_archive();
     <?php endif; ?>
 
     <?php
+    /**
+     * Filtro por usuario, solo visible para quien administra el
+     * recurso (sgf_editor, Administrador General, o el superusuario si
+     * decide usar el front-end en vez de wp-admin) — ver el docblock
+     * de BilleteraManagement sobre por qué este filtro es para ellos y
+     * no una reconstrucción del que ya trae gratis wp-admin. Form GET,
+     * sin nonce: no escribe nada, solo cambia qué se lista.
+     */
+    ?>
+    <?php if ($state['can_filter_by_usuario'] && !empty($state['usuario_opciones'])) : ?>
+        <form method="get" class="d-flex gap-2 align-items-end mb-4" style="max-width: 360px;">
+            <div class="flex-grow-1">
+                <label class="form-label" for="usuario"><?php esc_html_e('Filtrar por usuario', 'egc'); ?></label>
+                <select class="form-select form-select-sm" id="usuario" name="usuario">
+                    <?php if ($state['es_administrador_general']) : ?>
+                        <option value="<?php echo esc_attr(get_current_user_id()); ?>" <?php selected($state['usuario_seleccionado'], get_current_user_id()); ?>>
+                            <?php esc_html_e('Mis billeteras', 'egc'); ?>
+                        </option>
+                    <?php endif; ?>
+                    <option value="0" <?php selected($state['usuario_seleccionado'], 0); ?>>
+                        <?php esc_html_e('Todos los usuarios', 'egc'); ?>
+                    </option>
+                    <?php foreach ($state['usuario_opciones'] as $user_id => $email) : ?>
+                        <option value="<?php echo esc_attr($user_id); ?>" <?php selected($state['usuario_seleccionado'], $user_id); ?>>
+                            <?php echo esc_html($email); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-sm btn-outline-secondary"
+                    aria-label="<?php esc_attr_e('Filtrar', 'egc'); ?>"
+                    title="<?php esc_attr_e('Filtrar', 'egc'); ?>">
+                <i class="bi bi-funnel" aria-hidden="true"></i>
+            </button>
+        </form>
+    <?php endif; ?>
+
+    <?php
     // Este loop ya viene filtrado por usuario (o sin filtrar si
     // administra el recurso): ver BilleteraManagement::scope_archive_query(),
     // colgado de pre_get_posts. Acá no hay ninguna decisión de a quién

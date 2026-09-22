@@ -96,7 +96,7 @@ class UserManagement
     public function view_state()
     {
         $scope      = UserScope::get_instance();
-        $post_types = $scope->managed_post_types();
+        $post_types = $this->assignable_post_types($scope->managed_post_types(), $scope);
 
         $post_type_data = [];
         foreach ($post_types as $post_type) {
@@ -121,6 +121,27 @@ class UserManagement
             'admin_general_nonce_action' => self::ACTION_ADMIN_GENERAL,
             'nonce_name'                => '_egc_nonce',
         ];
+    }
+
+    /**
+     * Filtra los post_types administrados a los que además tienen su
+     * propia entrada en `assignable_roles` del manifest.
+     *
+     * Un módulo puede administrar más de un post_type con el MISMO
+     * alcance (ver el manifest de SGF: Libro cuelga de Billetera, así
+     * que comparten rol) — el que no declara `assignable_roles` propio
+     * no tiene ningún rol que ofrecer en esta pantalla, así que no le
+     * corresponde columna: mostrarla igual sería una columna con un
+     * único `<select>` vacío ("Sin acceso" y nada más), y asignarle
+     * algo ahí no haría nada porque no hay rol que asignar.
+     *
+     * @return string[]
+     */
+    private function assignable_post_types($post_types, UserScope $scope)
+    {
+        return array_values(array_filter($post_types, function ($post_type) use ($scope) {
+            return (bool) $scope->assignable_roles($post_type);
+        }));
     }
 
     private function role_labels($role_slugs)

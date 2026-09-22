@@ -4,6 +4,8 @@ namespace EGC\Modules\Sgf;
 
 use EGC\Modules\Sgf\Billetera\Billetera;
 use EGC\Modules\Sgf\Billetera\BilleteraManagement;
+use EGC\Modules\Sgf\Libro\Categoria;
+use EGC\Modules\Sgf\Libro\Libro;
 
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
@@ -16,15 +18,17 @@ if (!defined('ABSPATH')) {
  * after_setup_theme.
  *
  * A diferencia de Blog, este archivo vive en el namespace
- * EGC\Modules\Sgf pero las clases de Billetera viven un nivel más
- * adentro (EGC\Modules\Sgf\Billetera\…, en su propia subcarpeta) — por
- * eso hacen falta los `use` explícitos de arriba; una referencia
- * directa sin ellos, estando este archivo en el namespace
- * EGC\Modules\Sgf, resolvería al namespace equivocado y el autoloader
- * nunca las encontraría.
+ * EGC\Modules\Sgf pero las clases de Billetera y Libro viven un nivel
+ * más adentro (EGC\Modules\Sgf\Billetera\…, EGC\Modules\Sgf\Libro\…,
+ * cada una en su propia subcarpeta) — por eso hacen falta los `use`
+ * explícitos de arriba; una referencia directa sin ellos, estando este
+ * archivo en el namespace EGC\Modules\Sgf, resolvería al namespace
+ * equivocado y el autoloader nunca las encontraría.
  */
 Billetera::get_instance();
 BilleteraManagement::get_instance();
+Libro::get_instance();
+Categoria::get_instance();
 
 /**
  * Sembrado proactivo de la página de alta/edición: igual que Blog, no
