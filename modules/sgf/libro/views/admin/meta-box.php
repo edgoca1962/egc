@@ -10,6 +10,12 @@ if (!defined('ABSPATH')) {
  * aparecen acá: son internos, se derivan del signo de Monto al guardar
  * (ver Libro::guardar_meta_box()) — quien carga esto siempre trabaja
  * con un solo valor con signo, nunca con los dos campos por separado.
+ *
+ * El `<select>` de Categoría solo aparece si $estado['categoria_opciones']
+ * no viene vacío — con un movimiento nuevo (todavía sin Billetera
+ * guardada) no hay de quién sacar categorías, así que se muestra un
+ * aviso en su lugar en vez de un combo sin opciones (ver el docblock
+ * de Libro::render_meta_box()).
  */
 ?>
 <?php wp_nonce_field($estado['nonce_action'], $estado['nonce_name']); ?>
@@ -32,6 +38,24 @@ if (!defined('ABSPATH')) {
     <span class="description">
         <?php esc_html_e('Positivo = haber (ingreso). Negativo = debe (egreso).', 'egc'); ?>
     </span>
+</p>
+<p>
+    <label for="categoria_id"><strong><?php esc_html_e('Categoría', 'egc'); ?></strong></label><br>
+    <?php if (!empty($estado['categoria_opciones'])) : ?>
+        <select id="categoria_id" name="categoria_id" class="widefat">
+            <option value="0"><?php esc_html_e('— Sin categoría —', 'egc'); ?></option>
+            <?php foreach ($estado['categoria_opciones'] as $categoria) : ?>
+                <option value="<?php echo esc_attr($categoria['id']); ?>"
+                    <?php selected($estado['categoria_id'], $categoria['id']); ?>>
+                    <?php echo esc_html(str_repeat('— ', $categoria['profundidad']) . $categoria['nombre']); ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+    <?php else : ?>
+        <span class="description">
+            <?php esc_html_e('Elegí y guardá primero una Billetera. Una vez guardado el movimiento, volvé a abrirlo para asignarle una categoría.', 'egc'); ?>
+        </span>
+    <?php endif; ?>
 </p>
 <p>
     <label for="referencia"><strong><?php esc_html_e('Referencia', 'egc'); ?></strong></label><br>

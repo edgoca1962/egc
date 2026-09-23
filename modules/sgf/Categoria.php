@@ -1,10 +1,11 @@
 <?php
 
-namespace EGC\Modules\Sgf\Libro;
+namespace EGC\Modules\Sgf;
 
 use EGC\Core\ModuleLoader;
 use EGC\Core\Singleton;
 use EGC\Core\UserScope;
+use EGC\Modules\Sgf\Libro\Libro;
 use WP_Error;
 
 if (!defined('ABSPATH')) {
@@ -12,8 +13,50 @@ if (!defined('ABSPATH')) {
 }
 
 /**
- * Capa Lógica — la taxonomía de categorías de Libro, propia por
+ * Capa Lógica — la taxonomía de categorías del módulo SGF, propia por
  * usuario.
+ *
+ * Vive en la raíz de `modules/sgf/`, no dentro de `libro/`: aunque la
+ * sembró y la sigue administrando (crear/sembrar/reiniciar términos)
+ * el mismo código que nació con Libro, la usan también Presupuesto
+ * (`register_taxonomy_for_object_type()`, ver Presupuesto.php) y la
+ * van a usar los movimientos de Banco todavía por construir — es una
+ * categorización a nivel de módulo (Ingresos/Egresos y
+ * Gastos/Transferencias), no un detalle propio de un único recurso.
+ * Con el autoload dinámico de ModuleLoader (`EGC\Modules\Sgf\Clase` ->
+ * `modules/sgf/Clase.php`, ver su docblock), una clase sin subcarpeta
+ * intermedia en el namespace es justamente cómo se declara "esto es
+ * del módulo, no de un recurso puntual" — el mismo patrón que ya usa
+ * `modules/sgf/manifest.php` en la raíz.
+ *
+ * Sí sigue atada a Libro puntualmente en un solo lugar: la capacidad
+ * PISO para crear/gestionar términos (`assign_terms`/`manage_terms`/
+ * etc. en register_taxonomy(), vía libro_cap()) es `edit_libros`, no
+ * una capacidad propia de la taxonomía — WordPress no tiene un
+ * `capability_type` para taxonomías como sí tiene para CPT. En la
+ * práctica no separa a nadie: todo rol de SGF (sgf_editor, sgf_autor)
+ * recibe edit_libros junto con edit_presupuestos en el mismo manifest
+ * (ver modules/sgf/manifest.php), así que "tiene Libro" y "tiene SGF"
+ * son, hoy, el mismo conjunto de usuarios. Si el día de mañana
+ * existiera un usuario con presupuesto o movimientos de Banco pero sin
+ * acceso a Libro, ahí sí correspondería revisar este piso — no antes.
+ *
+ * Mantenimiento propio de categorías (crear, renombrar, eliminar,
+ * sustituir) vive en CategoriaManagement, no acá — pero dos de sus
+ * reglas de negocio SÍ cruzan a otros módulos ("¿esta categoría está
+ * en uso?", "reasigná estos posts de la categoría A a la B") y esta
+ * clase, otra vez, no puede conocer a Libro/Presupuesto/Banco uno por
+ * uno sin romper ARQUITECTURA MODULAR. Por eso CategoriaManagement
+ * dispara dos puntos de extensión (mismo mecanismo que
+ * `egc_dropdown_items_{$post_type}` y `egc_user_row_actions`, ver
+ * UserScope y core/views/gestion-usuarios.php): el filtro
+ * `egc_categoria_uso` (cada módulo suma cuántos de sus posts tienen
+ * esa categoría) y la pareja filtro+acción
+ * `egc_categoria_reasignar_validar` / `egc_categoria_reasignar` (cada
+ * módulo valida si puede reasignar sus posts de A a B sin conflicto,
+ * y recién si nadie objetó, los reasigna de verdad). Libro y
+ * Presupuesto ya se enganchan a los tres — Banco lo hará solo cuando
+ * exista, sin tocar esta clase ni CategoriaManagement.
  *
  * Es una única taxonomía jerárquica (`register_taxonomy` con
  * `hierarchical => true`), no tres separadas: los "3 niveles" (tipo,
@@ -172,6 +215,19 @@ class Categoria
      * real tiene) en vez de no filtrar — misma defensa adicional que
      * ya usa scope_archive_query(), aunque en la práctica nadie sin
      * sesión llega a pintar nada de Libro.
+     *
+     * `$args['meta_query']` no llega necesariamente como array u
+     * `unset` — `WP_Term_Query` lo trae por defecto como `''` (string
+     * vacío) cuando nadie lo pidió, y ese default SÍ llega hasta acá
+     * (la clave existe, con ese valor). `?? []` no lo detecta: `??`
+     * solo cubre "no existe" o `null`, no "existe pero es un string
+     * vacío" — de ahí el `is_array()` explícito en vez de `??`. Bug
+     * real encontrado en producción (2026-09-22): reventaba recién al
+     * guardar el primer movimiento, porque `wp_insert_post()` con
+     * `post_status => 'publish'` dispara el recuento de términos de
+     * WordPress (`_update_term_count_on_transition_post_status`), que
+     * llama a `get_terms()` con ese `''` por defecto nunca antes
+     * ejercitado por este filtro.
      */
     public function scope_get_terms($args, $taxonomies)
     {
@@ -185,7 +241,9 @@ class Categoria
 
         $user_id = is_user_logged_in() ? get_current_user_id() : 0;
 
-        $args['meta_query'] = array_merge($args['meta_query'] ?? [], [
+        $meta_query = is_array($args['meta_query'] ?? null) ? $args['meta_query'] : [];
+
+        $args['meta_query'] = array_merge($meta_query, [
             [
                 'key'     => self::META_USUARIO,
                 'value'   => $user_id,
@@ -247,6 +305,267 @@ class Categoria
         update_term_meta($resultado['term_id'], self::META_USUARIO, $user_id);
 
         return (int) $resultado['term_id'];
+    }
+
+    /**
+     * Si el término $term_id es propio de $user_id — lo usa
+     * LibroManagement::handle_save() para validar el categoria_id que
+     * llega por POST antes de asignarlo a un movimiento: sin este
+     * chequeo, alguien podría mandar a mano el ID de un término de
+     * otro usuario.
+     */
+    public function pertenece_a($term_id, $user_id)
+    {
+        return (int) get_term_meta($term_id, self::META_USUARIO, true) === (int) $user_id;
+    }
+
+    /**
+     * Profundidad de $term_id dentro del árbol: 0 = tipo raíz
+     * (Ingresos/Egresos y Gastos/Transferencias), 1 = categoría, 2 =
+     * subcategoría. Mismo recorrido de padres que tipo_de(), pero
+     * contando niveles en vez de quedarse con la raíz — lo usan
+     * renombrar_termino() y eliminar_termino() para bloquear el tipo
+     * raíz (Edwin: "el primer nivel no se le podrá dar ningún tipo de
+     * mantenimiento"), y CategoriaManagement para no ofrecer como
+     * padre de una categoría nueva algo que ya está en el tope de 3
+     * niveles.
+     *
+     * @return int|null null si $term_id no existe.
+     */
+    public function profundidad_de($term_id)
+    {
+        $termino = get_term($term_id, self::TAXONOMY);
+        if (!$termino || is_wp_error($termino)) {
+            return null;
+        }
+
+        $profundidad = 0;
+        while ((int) $termino->parent !== 0) {
+            $termino = get_term($termino->parent, self::TAXONOMY);
+            if (!$termino || is_wp_error($termino)) {
+                break;
+            }
+            $profundidad++;
+        }
+
+        return $profundidad;
+    }
+
+    /**
+     * Renombra un término propio de $user_id. Nunca un tipo raíz
+     * (profundidad 0): esa restricción la dio Edwin explícitamente, y
+     * además el reporte de Presupuesto compara contra esos tres
+     * nombres literales (ver Categoria::prioridad_tipo()) — permitir
+     * renombrarlos rompería esa comparación en silencio.
+     *
+     * @return true|WP_Error
+     */
+    public function renombrar_termino($term_id, $nuevo_nombre, $user_id)
+    {
+        if (!$this->pertenece_a($term_id, $user_id)) {
+            return new WP_Error('no_autorizado', __('Esa categoría no te pertenece.', 'egc'));
+        }
+
+        if ($this->profundidad_de($term_id) === 0) {
+            return new WP_Error('tipo_protegido', __('Los tipos (Ingresos, Egresos y Gastos, Transferencias) no se pueden renombrar.', 'egc'));
+        }
+
+        $nuevo_nombre = trim((string) $nuevo_nombre);
+        if ($nuevo_nombre === '') {
+            return new WP_Error('nombre_vacio', __('El nombre de la categoría no puede quedar vacío.', 'egc'));
+        }
+
+        $resultado = wp_update_term($term_id, self::TAXONOMY, ['name' => $nuevo_nombre]);
+
+        return is_wp_error($resultado) ? $resultado : true;
+    }
+
+    /**
+     * Elimina un término propio de $user_id. Nunca un tipo raíz,
+     * mismo motivo que renombrar_termino().
+     *
+     * A propósito NO comprueba acá si el término está en uso (si hay
+     * movimientos de Libro o presupuestos cargados con él): esa
+     * pregunta cruza a otros módulos, y esta clase vive a nivel de
+     * módulo precisamente para no tener que conocerlos uno por uno
+     * (ver el docblock de la clase). Quien llama a este método
+     * (CategoriaManagement::handle_eliminar()) ya disparó el filtro de
+     * extensión `egc_categoria_uso` antes y solo llega hasta acá si
+     * ese conteo dio cero.
+     *
+     * @return true|WP_Error
+     */
+    public function eliminar_termino($term_id, $user_id)
+    {
+        if (!$this->pertenece_a($term_id, $user_id)) {
+            return new WP_Error('no_autorizado', __('Esa categoría no te pertenece.', 'egc'));
+        }
+
+        if ($this->profundidad_de($term_id) === 0) {
+            return new WP_Error('tipo_protegido', __('Los tipos (Ingresos, Egresos y Gastos, Transferencias) no se pueden eliminar.', 'egc'));
+        }
+
+        $resultado = wp_delete_term($term_id, self::TAXONOMY);
+
+        if (is_wp_error($resultado)) {
+            return $resultado;
+        }
+
+        return $resultado ? true : new WP_Error('no_encontrado', __('La categoría ya no existe.', 'egc'));
+    }
+
+    /**
+     * Árbol de categorías propias de $user_id, aplanado con su
+     * profundidad — para pintar un `<select>` con sangría en el
+     * formulario de movimiento (LibroManagement) sin que la vista
+     * tenga que resolver jerarquía ella misma (eso sería lógica, no
+     * presentación).
+     *
+     * No puede reusar get_terms() tal cual esperando que
+     * scope_get_terms() lo acote solo: ese filtro acota por quien está
+     * MIRANDO la pantalla, y acá lo que importa es de quién es la
+     * BILLETERA del movimiento — si sgf_editor carga un movimiento en
+     * nombre de otro usuario, tiene que ver las categorías de ESE
+     * otro, no las propias. Por eso arma su propio meta_query con
+     * $user_id explícito en vez de depender del filtro global.
+     *
+     * `get_terms()` con `orderby => name` da UNA lista aplanada en
+     * orden alfabético global — alcanza para que los hijos de cada
+     * padre salgan alfabéticos entre sí (se conserva ese orden relativo
+     * al filtrarlos por padre en aplanar()), pero para los tres tipos
+     * RAÍZ (Ingresos / Egresos y Gastos / Transferencias) el alfabético
+     * no es el orden que pidió Edwin — es financiero (ver
+     * prioridad_tipo()). Por eso los tipos se extraen y reordenan
+     * aparte, y cada uno de sus subárboles se aplana por separado, en
+     * ESE orden — sin tocar cómo se ordenan los hijos dentro de cada
+     * uno, que siguen viniendo alfabéticos de $terminos tal cual.
+     *
+     * @return array<int,array{id:int,nombre:string,profundidad:int}>
+     */
+    public function arbol_de($user_id)
+    {
+        $terminos = get_terms([
+            'taxonomy'   => self::TAXONOMY,
+            'hide_empty' => false,
+            'orderby'    => 'name',
+            'order'      => 'ASC',
+            'meta_query' => [
+                [
+                    'key'     => self::META_USUARIO,
+                    'value'   => $user_id,
+                    'compare' => '=',
+                ],
+            ],
+        ]);
+
+        if (is_wp_error($terminos) || empty($terminos)) {
+            return [];
+        }
+
+        $tipos = array_values(array_filter($terminos, function ($termino) {
+            return (int) $termino->parent === 0;
+        }));
+
+        usort($tipos, function ($a, $b) {
+            return $this->prioridad_tipo($a->name) <=> $this->prioridad_tipo($b->name);
+        });
+
+        $resultado = [];
+        foreach ($tipos as $tipo) {
+            $resultado[] = [
+                'id'          => $tipo->term_id,
+                'nombre'      => $tipo->name,
+                'profundidad' => 0,
+            ];
+            $resultado = array_merge($resultado, $this->aplanar($terminos, $tipo->term_id, 1));
+        }
+
+        return $resultado;
+    }
+
+    /**
+     * Orden financiero de presentación para un nombre de tipo RAÍZ
+     * (Ingresos / Egresos y Gastos / Transferencias) — no el
+     * alfabético que da `get_terms()`. Se deriva directamente del
+     * orden en que ARBOL_BASE ya declara esos tres tipos (única fuente
+     * de verdad: si ese orden cambiara ahí, este método lo sigue solo,
+     * sin otra lista para mantener sincronizada) — nunca de un nombre
+     * pasado por `__()`, porque `get_term()` devuelve el dato crudo tal
+     * como quedó guardado en la base. Un tipo fuera de esos tres (si
+     * alguna vez se agrega uno a mano) cae al final, sin romper nada.
+     *
+     * Método público porque, además de usarlo `arbol_de()` acá mismo,
+     * lo necesita PresupuestoManagement::monedas_de() para agrupar su
+     * listado en este mismo orden — es la segunda vez que aparece este
+     * criterio, y el dueño natural de "cuál es el orden financiero de
+     * los tipos" es esta clase (dueña de ARBOL_BASE), no quien lo
+     * consume.
+     */
+    public function prioridad_tipo($nombre)
+    {
+        $orden = array_search($nombre, array_keys(self::ARBOL_BASE), true);
+
+        return $orden !== false ? $orden : count(self::ARBOL_BASE);
+    }
+
+    /**
+     * Aplana el árbol jerárquico de $terminos (padres antes que hijos,
+     * hijos antes que nietos) agregando su profundidad — comparte la
+     * misma lista de términos ya traída por arbol_de() en cada llamada
+     * recursiva, en vez de volver a consultar get_terms() por cada
+     * nivel.
+     *
+     * @return array<int,array{id:int,nombre:string,profundidad:int}>
+     */
+    private function aplanar($terminos, $parent_id, $profundidad = 0)
+    {
+        $resultado = [];
+
+        foreach ($terminos as $termino) {
+            if ((int) $termino->parent !== $parent_id) {
+                continue;
+            }
+
+            $resultado[] = [
+                'id'          => $termino->term_id,
+                'nombre'      => $termino->name,
+                'profundidad' => $profundidad,
+            ];
+
+            $resultado = array_merge($resultado, $this->aplanar($terminos, $termino->term_id, $profundidad + 1));
+        }
+
+        return $resultado;
+    }
+
+    /**
+     * El término RAÍZ del árbol al que pertenece $term_id — "Ingresos",
+     * "Egresos y Gastos" o "Transferencias" (ver ARBOL_BASE), sea cual
+     * sea la profundidad real de $term_id (tipo, categoría o
+     * subcategoría). Lo usa PresupuestoManagement para agrupar su
+     * listado en orden financiero (Ingresos primero con su subtotal,
+     * después Egresos, ver su docblock) — un orden que no tiene nada
+     * que ver con el alfabético que ya da arbol_de(), así que hace
+     * falta este método aparte.
+     *
+     * @return \WP_Term|null
+     */
+    public function tipo_de($term_id)
+    {
+        $termino = get_term($term_id, self::TAXONOMY);
+        if (!$termino || is_wp_error($termino)) {
+            return null;
+        }
+
+        while ((int) $termino->parent !== 0) {
+            $padre = get_term($termino->parent, self::TAXONOMY);
+            if (!$padre || is_wp_error($padre)) {
+                break;
+            }
+            $termino = $padre;
+        }
+
+        return $termino;
     }
 
     /**
@@ -378,7 +697,7 @@ class Categoria
         }
 
         $estado = $this->view_state_fila_usuario($user_id);
-        include EGC_DIR . '/modules/sgf/libro/views/partials/categoria-usuario.php';
+        include EGC_DIR . '/modules/sgf/views/partials/categoria-usuario.php';
     }
 
     /**

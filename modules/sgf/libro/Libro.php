@@ -4,6 +4,8 @@ namespace EGC\Modules\Sgf\Libro;
 
 use EGC\Core\Singleton;
 use EGC\Modules\Sgf\Billetera\Billetera;
+use EGC\Modules\Sgf\Categoria;
+use WP_Post;
 
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
@@ -27,12 +29,18 @@ if (!defined('ABSPATH')) {
  * capacidades queden aisladas de las de cualquier otro CPT, tal como
  * pide AUTORIZACIÓN.
  *
- * Esta clase solo declara el recurso (el CPT y sus cuatro postmeta).
- * El resto — guardar con `post_author` forzado al dueño de la
- * billetera padre, recalcular el saldo, los guards de acceso, los
- * filtros del archive — va en `LibroManagement`, misma separación de
- * razones de cambio que ya existe entre `Billetera` y
- * `BilleteraManagement`.
+ * Esta clase declara el recurso (el CPT y sus cuatro postmeta) y las
+ * reglas que tienen que cumplirse SIEMPRE, sea cual sea la puerta por
+ * la que se guarde un movimiento — el meta box de wp-admin de acá
+ * abajo, o el formulario propio de `LibroManagement` (paso siguiente):
+ * forzar `post_parent`/`post_author` al dueño de la billetera
+ * (`forzar_billetera_y_autor()`) y recalcular el saldo de esa
+ * billetera (`recalcular_saldo_billetera()`), ambas colgadas de hooks
+ * nativos de WordPress que disparan sin importar el llamador. Lo que
+ * SÍ es específico del formulario front-end — sus guards de acceso,
+ * su `view_state()`, sus handlers de `admin-post.php` — va en
+ * `LibroManagement`, misma separación de razones de cambio que ya
+ * existe entre `Billetera` y `BilleteraManagement`.
  */
 class Libro
 {
@@ -46,9 +54,25 @@ class Libro
         add_action('init', [$this, 'register_post_meta']);
         add_action('add_meta_boxes', [$this, 'register_meta_box']);
         add_action('save_post_' . self::POST_TYPE, [$this, 'guardar_meta_box']);
+        add_action('save_post_' . self::POST_TYPE, [$this, 'recalcular_saldo_billetera']);
+        add_action('trashed_post', [$this, 'recalcular_saldo_billetera']);
+        add_action('untrashed_post', [$this, 'recalcular_saldo_billetera']);
+        add_action('before_delete_post', [$this, 'recalcular_saldo_billetera']);
         add_filter('wp_insert_post_data', [$this, 'forzar_billetera_y_autor'], 10, 2);
     }
 
+    /**
+     * `public => false` a propósito (corregido en este paso — antes
+     * decía `true` con `has_archive => true`, copiado por analogía de
+     * Billetera sin que correspondiera): un movimiento nunca se ve por
+     * fuera del detalle de su billetera, así que no necesita URL propia
+     * de WordPress. Con `public => false` WordPress ni siquiera genera
+     * esas rutas, así que no hace falta ningún guard de single/archive
+     * acá ni en LibroManagement. `show_ui => true` explícito para que
+     * el superusuario lo siga viendo en wp-admin (con `public => true`
+     * eso venía gratis; al apagarlo hay que pedirlo aparte), mismo
+     * criterio que ya tiene Billetera con `public => true`.
+     */
     public function register_post_type()
     {
         register_post_type(self::POST_TYPE, [
@@ -63,9 +87,8 @@ class Libro
                 'not_found'          => __('No se encontraron movimientos', 'egc'),
                 'not_found_in_trash' => __('No hay movimientos en la papelera', 'egc'),
             ],
-            'public'          => true,
-            'has_archive'     => true,
-            'rewrite'         => ['slug' => self::POST_TYPE],
+            'public'          => false,
+            'show_ui'         => true,
             'supports'        => ['title'],
             'capability_type' => [self::POST_TYPE, self::POST_TYPE . 's'],
             'map_meta_cap'    => true,
@@ -162,13 +185,45 @@ class Libro
         );
     }
 
+    /**
+     * Las categorías válidas son las del DUEÑO de la billetera elegida
+     * (mismo criterio que Categoria::arbol_de() ya documenta para
+     * LibroManagement), no las de quien está mirando wp-admin — acá
+     * siempre es el superusuario, que no tiene categorías propias de
+     * Libro. Por eso hace falta resolver primero la billetera
+     * (`post_parent`) antes de poder armar el `<select>` de categoría.
+     *
+     * CRUD Y SEGURIDAD pide server-side sin JS: no hay forma de
+     * recalcular ESTE `<select>` en el momento en que el superusuario
+     * cambia el de Billetera sin JavaScript. Por eso, para un
+     * movimiento nuevo (sin `post_parent` todavía) el `<select>` de
+     * categoría no tiene de dónde salir — la vista muestra un aviso en
+     * vez de un combo vacío, y el flujo queda en dos guardados: primero
+     * elegir la billetera (con lo que WordPress ya fija el
+     * `post_parent` vía forzar_billetera_y_autor()), volver a abrir el
+     * mismo movimiento, y ahí sí aparece el combo con las categorías
+     * del dueño de esa billetera. Mismo espíritu que ya tiene el propio
+     * `<select>` de Billetera: nada dinámico, todo resuelto en el
+     * servidor antes de pintar.
+     */
     public function render_meta_box($post)
     {
+        $billetera_id = (int) $post->post_parent;
+        $billetera    = $billetera_id ? get_post($billetera_id) : null;
+        $dueño_id     = ($billetera instanceof WP_Post && $billetera->post_type === Billetera::POST_TYPE)
+            ? (int) $billetera->post_author
+            : 0;
+
+        $terminos     = $post->ID ? get_the_terms($post->ID, Categoria::TAXONOMY) : [];
+        $categoria_id = (!empty($terminos) && !is_wp_error($terminos)) ? (int) $terminos[0]->term_id : 0;
+
         $estado = [
             'monto'              => (float) get_post_meta($post->ID, '_monto', true),
             'referencia'         => (string) get_post_meta($post->ID, '_referencia', true),
-            'billetera_id'       => (int) $post->post_parent,
+            'billetera_id'       => $billetera_id,
             'billetera_opciones' => $this->billetera_opciones(),
+            'categoria_id'       => $categoria_id,
+            'categoria_opciones' => $dueño_id ? Categoria::get_instance()->arbol_de($dueño_id) : [],
             'nonce_action'       => 'egc_libro_meta_box',
             'nonce_name'         => '_egc_libro_meta_nonce',
         ];
@@ -244,6 +299,39 @@ class Libro
         if (isset($_POST['referencia'])) {
             update_post_meta($post_id, '_referencia', sanitize_text_field(wp_unslash($_POST['referencia'])));
         }
+
+        $this->guardar_categoria($post_id);
+    }
+
+    /**
+     * Asigna la categoría elegida en el meta box — misma validación y
+     * mismo método (Categoria::pertenece_a()) que ya usa
+     * LibroManagement::handle_save() para el formulario propio: tiene
+     * que ser una categoría del DUEÑO de la billetera, no de quien
+     * guarda (acá, el superusuario). Si no hay billetera válida
+     * todavía, o la categoría no es de su dueño, o directamente no se
+     * eligió ninguna, el movimiento queda sin categoría — "sin
+     * categoría" es una elección válida, no se deja lo que hubiera
+     * antes.
+     */
+    private function guardar_categoria($post_id)
+    {
+        $billetera_id = isset($_POST['billetera_id']) ? absint($_POST['billetera_id']) : 0;
+        $billetera    = $billetera_id ? get_post($billetera_id) : null;
+
+        if (!$billetera instanceof WP_Post || $billetera->post_type !== Billetera::POST_TYPE) {
+            wp_set_object_terms($post_id, [], Categoria::TAXONOMY, false);
+            return;
+        }
+
+        $categoria_id = isset($_POST['categoria_id']) ? absint($_POST['categoria_id']) : 0;
+        $dueño_id     = (int) $billetera->post_author;
+
+        if ($categoria_id && !Categoria::get_instance()->pertenece_a($categoria_id, $dueño_id)) {
+            $categoria_id = 0;
+        }
+
+        wp_set_object_terms($post_id, $categoria_id ? [$categoria_id] : [], Categoria::TAXONOMY, false);
     }
 
     /**
@@ -282,5 +370,86 @@ class Libro
         }
 
         return $data;
+    }
+
+    /**
+     * Recalcula el saldo de la billetera padre cada vez que un
+     * movimiento se guarda, se manda a la papelera, se restaura, o se
+     * elimina en forma permanente — sea cual sea la puerta por la que
+     * pasó (el meta box de acá arriba, o
+     * LibroManagement::handle_save()/handle_trash(), paso siguiente):
+     * son hooks nativos de WordPress que disparan siempre, así que la
+     * regla queda en un solo lugar en vez de repetida en cada
+     * llamador — ver el docblock de la clase.
+     *
+     * `trashed_post`/`untrashed_post`/`before_delete_post` disparan
+     * para CUALQUIER post_type (a diferencia de `save_post_libro`, que
+     * ya viene filtrado por el nombre del hook), por eso el primer
+     * chequeo descarta todo lo que no sea un movimiento.
+     *
+     * Orden de registro importa: en el constructor, `guardar_meta_box`
+     * se engancha a `save_post_libro` ANTES que este método — con la
+     * misma prioridad, WordPress ejecuta los hooks en el orden en que
+     * se agregaron, así que `_monto` ya quedó escrito por
+     * `guardar_meta_box()` (o por el `meta_input` de
+     * `LibroManagement::handle_save()`, que WordPress procesa antes de
+     * disparar `save_post`) para cuando este método lo lee.
+     */
+    public function recalcular_saldo_billetera($post_id)
+    {
+        if (get_post_type($post_id) !== self::POST_TYPE) {
+            return;
+        }
+
+        $post = get_post($post_id);
+        if (!$post || !$post->post_parent) {
+            return;
+        }
+
+        $this->guardar_saldo($post->post_parent, $this->calcular_saldo($post->post_parent));
+    }
+
+    /**
+     * Suma `_monto` de todos los movimientos PUBLICADOS de esta
+     * billetera — recalcula desde cero en vez de sumar/restar
+     * incrementalmente sobre el `_saldo` existente, así un movimiento
+     * editado (el monto cambia) o eliminado nunca deja un residuo mal
+     * sumado. Con la cantidad de movimientos esperable acá, recorrerlos
+     * todos en cada guardado es insignificante.
+     */
+    private function calcular_saldo($billetera_id)
+    {
+        $movimientos = get_posts([
+            'post_type'      => self::POST_TYPE,
+            'post_parent'    => $billetera_id,
+            'post_status'    => 'publish',
+            'posts_per_page' => -1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+        ]);
+
+        $saldo = 0.0;
+        foreach ($movimientos as $movimiento_id) {
+            $saldo += (float) get_post_meta($movimiento_id, '_monto', true);
+        }
+
+        return round($saldo, 2);
+    }
+
+    /**
+     * wp_update_post() sobre la billetera dispara a su vez
+     * save_post_billetera (Billetera::guardar_meta_box()), pero sin
+     * riesgo de bucle ni de pisar nada: ese método exige su propio
+     * nonce de meta box (`_egc_billetera_meta_nonce`) antes de tocar
+     * cualquier dato, y acá nunca está presente — así que se corta solo
+     * en su primera línea. No hace falta remove_action()/add_action()
+     * alrededor de este wp_update_post() por ese motivo.
+     */
+    private function guardar_saldo($billetera_id, $saldo)
+    {
+        wp_update_post([
+            'ID'         => $billetera_id,
+            'meta_input' => ['_saldo' => $saldo],
+        ]);
     }
 }

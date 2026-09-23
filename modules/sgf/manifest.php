@@ -57,13 +57,20 @@ if (!defined('ABSPATH')) {
  * entrada (`billetera`) que ya cubre ambos recursos alcanza, y
  * `UserManagement::view_state()` omite de la tabla cualquier post_type
  * managed sin `assignable_roles` propio — ver ese archivo.
+ *
+ * `presupuesto` (ver modules/sgf/presupuesto/Presupuesto.php) se suma
+ * con el mismo criterio que `libro`: capability_type propio
+ * (`presupuesto`/`presupuestos`), capacidades para `sgf_editor` y
+ * `sgf_autor`, y tampoco tiene entrada propia en `assignable_roles` —
+ * mismo motivo: sigue siendo un solo alcance ("¿participa de SGF?"),
+ * no uno nuevo por cada recurso que se agregue al módulo.
  */
 return [
     'nombre' => __('Sistema de Gestión Financiera', 'egc'),
 
     'sigla' => 'SGF',
 
-    'post_types' => ['billetera', 'libro'],
+    'post_types' => ['billetera', 'libro', 'presupuesto'],
 
     'roles' => [
         'sgf_editor' => [
@@ -90,6 +97,16 @@ return [
                 'delete_others_libros'        => true,
                 'delete_published_libros'     => true,
                 'delete_private_libros'       => true,
+                'edit_presupuestos'             => true,
+                'edit_others_presupuestos'      => true,
+                'edit_published_presupuestos'   => true,
+                'edit_private_presupuestos'     => true,
+                'publish_presupuestos'          => true,
+                'read_private_presupuestos'     => true,
+                'delete_presupuestos'           => true,
+                'delete_others_presupuestos'    => true,
+                'delete_published_presupuestos' => true,
+                'delete_private_presupuestos'   => true,
             ],
         ],
         'sgf_autor' => [
@@ -106,6 +123,11 @@ return [
                 'publish_libros'              => true,
                 'delete_libros'               => true,
                 'delete_published_libros'     => true,
+                'edit_presupuestos'             => true,
+                'edit_published_presupuestos'   => true,
+                'publish_presupuestos'          => true,
+                'delete_presupuestos'           => true,
+                'delete_published_presupuestos' => true,
             ],
         ],
     ],

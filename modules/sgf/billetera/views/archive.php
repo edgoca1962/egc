@@ -7,27 +7,26 @@ if (!defined('ABSPATH')) {
 }
 
 $manager = BilleteraManagement::get_instance();
-$state   = $manager->view_state_archive();
+$state = $manager->view_state_archive();
 ?>
 <div class="container py-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="mb-0"><?php esc_html_e('Billeteras', 'egc'); ?></h1>
 
-        <?php if ($manager->can_create()) : ?>
-            <a class="btn btn-primary"
-               href="<?php echo esc_url($manager->url_editar()); ?>"
-               aria-label="<?php esc_attr_e('Agregar billetera', 'egc'); ?>"
-               title="<?php esc_attr_e('Agregar billetera', 'egc'); ?>">
+        <?php if ($manager->can_create()): ?>
+            <a class="btn btn-primary" href="<?php echo esc_url($manager->url_editar()); ?>"
+                aria-label="<?php esc_attr_e('Agregar billetera', 'egc'); ?>"
+                title="<?php esc_attr_e('Agregar billetera', 'egc'); ?>">
                 <i class="bi bi-plus-lg" aria-hidden="true"></i>
             </a>
         <?php endif; ?>
     </div>
 
-    <?php if ($state['success']) : ?>
+    <?php if ($state['success']): ?>
         <div class="alert alert-success"><?php esc_html_e('Cambios guardados.', 'egc'); ?></div>
     <?php endif; ?>
 
-    <?php if ($state['error']) : ?>
+    <?php if ($state['error']): ?>
         <div class="alert alert-danger"><?php echo esc_html($state['error']); ?></div>
     <?php endif; ?>
 
@@ -41,12 +40,12 @@ $state   = $manager->view_state_archive();
      * sin nonce: no escribe nada, solo cambia qué se lista.
      */
     ?>
-    <?php if ($state['can_filter_by_usuario'] && !empty($state['usuario_opciones'])) : ?>
-        <form method="get" class="d-flex gap-2 align-items-end mb-4" style="max-width: 360px;">
+    <?php if ($state['can_filter_by_usuario'] && !empty($state['usuario_opciones'])): ?>
+        <form method="get" class="d-flex gap-2 align-items-end mb-4">
             <div class="flex-grow-1">
                 <label class="form-label" for="usuario"><?php esc_html_e('Filtrar por usuario', 'egc'); ?></label>
                 <select class="form-select form-select-sm" id="usuario" name="usuario">
-                    <?php if ($state['es_administrador_general']) : ?>
+                    <?php if ($state['es_administrador_general']): ?>
                         <option value="<?php echo esc_attr(get_current_user_id()); ?>" <?php selected($state['usuario_seleccionado'], get_current_user_id()); ?>>
                             <?php esc_html_e('Mis billeteras', 'egc'); ?>
                         </option>
@@ -54,7 +53,7 @@ $state   = $manager->view_state_archive();
                     <option value="0" <?php selected($state['usuario_seleccionado'], 0); ?>>
                         <?php esc_html_e('Todos los usuarios', 'egc'); ?>
                     </option>
-                    <?php foreach ($state['usuario_opciones'] as $user_id => $email) : ?>
+                    <?php foreach ($state['usuario_opciones'] as $user_id => $email): ?>
                         <option value="<?php echo esc_attr($user_id); ?>" <?php selected($state['usuario_seleccionado'], $user_id); ?>>
                             <?php echo esc_html($email); ?>
                         </option>
@@ -62,8 +61,7 @@ $state   = $manager->view_state_archive();
                 </select>
             </div>
             <button type="submit" class="btn btn-sm btn-outline-secondary"
-                    aria-label="<?php esc_attr_e('Filtrar', 'egc'); ?>"
-                    title="<?php esc_attr_e('Filtrar', 'egc'); ?>">
+                aria-label="<?php esc_attr_e('Filtrar', 'egc'); ?>" title="<?php esc_attr_e('Filtrar', 'egc'); ?>">
                 <i class="bi bi-funnel" aria-hidden="true"></i>
             </button>
         </form>
@@ -75,22 +73,40 @@ $state   = $manager->view_state_archive();
     // colgado de pre_get_posts. Acá no hay ninguna decisión de a quién
     // le pertenece cada fila, solo se pinta lo que WordPress ya devolvió.
     ?>
-    <?php if (have_posts()) : ?>
+    <?php if (have_posts()): ?>
         <div class="row g-4">
-            <?php while (have_posts()) : the_post(); ?>
+            <?php while (have_posts()):
+                the_post(); ?>
                 <?php
-                $saldo    = (float) get_post_meta(get_the_ID(), '_saldo', true);
-                $moneda   = (int) get_post_meta(get_the_ID(), '_moneda', true);
+                $saldo = (float) get_post_meta(get_the_ID(), '_saldo', true);
+                $moneda = (int) get_post_meta(get_the_ID(), '_moneda', true);
                 $post_url = $manager->with_return_here(get_permalink());
                 ?>
                 <div class="col-md-6 col-lg-4">
                     <div class="card h-100">
                         <div class="card-body d-flex flex-column">
-                            <h2 class="h5 card-title">
-                                <a class="text-decoration-none" href="<?php echo esc_url($post_url); ?>"><?php the_title(); ?></a>
+                            <h2 class="h5 card-title d-flex align-items-center gap-2">
+                                <a class="text-decoration-none"
+                                    href="<?php echo esc_url($post_url); ?>"><?php the_title(); ?></a>
+                                <?php
+                                /**
+                                 * ID de la billetera, visible acá y en su
+                                 * detalle (single.php) ÚNICAMENTE — Edwin lo
+                                 * pidió así para poder escribirlo en el CSV
+                                 * de "Importar movimientos" (ver
+                                 * LibroImportacion), que identifica la
+                                 * billetera de cada fila por ID, no por
+                                 * nombre.
+                                 */
+                                ?>
+                                <span class="badge text-bg-light text-primary fw-normal"
+                                    title="<?php esc_attr_e('ID de billetera — usalo en el CSV de Importar movimientos', 'egc'); ?>">
+                                    ID:<?php echo esc_html(get_the_ID()); ?>
+                                </span>
                             </h2>
                             <p class="mb-1">
-                                <span class="badge text-bg-secondary"><?php echo esc_html($manager->moneda_label($moneda)); ?></span>
+                                <span
+                                    class="badge text-bg-secondary"><?php echo esc_html($manager->moneda_label($moneda)); ?></span>
                             </p>
                             <p class="card-text flex-grow-1 fs-4 <?php echo $saldo < 0 ? 'text-danger' : 'text-success'; ?>">
                                 <?php echo esc_html(number_format_i18n($saldo, 2)); ?>
@@ -110,7 +126,7 @@ $state   = $manager->view_state_archive();
         <div class="mt-4">
             <?php the_posts_pagination(); ?>
         </div>
-    <?php else : ?>
+    <?php else: ?>
         <p><?php esc_html_e('Todavía no registraste ninguna billetera.', 'egc'); ?></p>
     <?php endif; ?>
 </div>
