@@ -83,7 +83,7 @@ $state = $manager->view_state_archive();
                 $post_url = $manager->with_return_here(get_permalink());
                 ?>
                 <div class="col-md-6 col-lg-4">
-                    <div class="card h-100">
+                    <div class="card h-100 shadow">
                         <div class="card-body d-flex flex-column">
                             <h2 class="h5 card-title d-flex align-items-center gap-2">
                                 <a class="text-decoration-none"

@@ -109,11 +109,14 @@ $state   = $manager->view_state();
                 <li>
                     <strong><?php esc_html_e('Debe', 'egc'); ?></strong> <?php esc_html_e('y', 'egc'); ?>
                     <strong><?php esc_html_e('Haber', 'egc'); ?></strong> —
-                    <?php esc_html_e('ambos positivos (o vacíos); el monto del movimiento se calcula como Haber menos Debe.', 'egc'); ?>
+                    <?php esc_html_e('ambos positivos (o vacíos, o un guion solo "-" para cero). Si el monto es mayor a mil, con coma como separador de miles y punto como decimal (por ejemplo 1,234.56). El monto del movimiento se calcula como Haber menos Debe.', 'egc'); ?>
                 </li>
                 <li>
                     <strong><?php esc_html_e('Referencia', 'egc'); ?></strong> —
-                    <?php esc_html_e('opcional.', 'egc'); ?>
+                    <?php esc_html_e('no puede quedar vacía.', 'egc'); ?>
+                    <strong class="text-warning d-block">
+                        <?php esc_html_e('La combinación de Fecha, Monto (Haber menos Debe) y Referencia tiene que ser única: si se repite, el movimiento repetido no se importa.', 'egc'); ?>
+                    </strong>
                 </li>
             </ul>
 

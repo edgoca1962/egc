@@ -26,6 +26,7 @@ class Core
         Assets::get_instance();
         Mail::get_instance();
         RoleSync::get_instance();
+        PostSlugs::get_instance();
 
         // Fase 2 — usuarios, acceso y navegación.
         UserStatus::get_instance();

@@ -9,6 +9,7 @@ use EGC\Core\UserScope;
 use EGC\Modules\Sgf\Billetera\Billetera;
 use EGC\Modules\Sgf\Categoria;
 use WP_Post;
+use WP_Query;
 
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
@@ -70,6 +71,22 @@ class LibroManagement
     const ACTION_RECATEGORIZAR = 'egc_libro_recategorizar';
 
     const NONCE_NAME = '_egc_nonce';
+
+    /**
+     * Tope de filas por página en "Mantenimiento de movimientos" — sin
+     * esto, movimientos_filtrados() traía TODO lo que matcheara el
+     * filtro de una sola vez (posts_per_page => -1, sin límite). Con
+     * una carga masiva de miles de movimientos sin categorizar, eso
+     * quedaba lento de pintar y, más grave, exponía al formulario de
+     * "Aplicar" al límite nativo de PHP `max_input_vars` (1.000 por
+     * defecto en la mayoría de los hostings): con más checkboxes
+     * tildados que ese límite, PHP descarta en silencio los que
+     * sobran — la recategorización en bloque terminaba aplicándose
+     * solo a una fracción de lo tildado, sin ningún error visible.
+     * 100 por página deja el checkbox de cada página muy por debajo
+     * de ese límite.
+     */
+    const MOVIMIENTOS_POR_PAGINA = 100;
 
     private $url_editar = null;
 
@@ -423,12 +440,23 @@ class LibroManagement
      *   nonce_action: string,
      *   nonce_name: string,
      *   redirect_to: string,
+     *   paginacion: array{actual:int, total_paginas:int, total_movimientos:int, desde:int, hasta:int},
      * }
      */
     public function view_state_mantenimiento()
     {
-        $user_id = get_current_user_id();
-        $filtros = $this->filtros_mantenimiento();
+        $user_id   = get_current_user_id();
+        $filtros   = $this->filtros_mantenimiento();
+        $resultado = $this->movimientos_filtrados($filtros, $user_id);
+
+        // El rango "mostrando X–Y de Z" es aritmética de paginación,
+        // no una consulta ni una decisión de negocio — se arma acá
+        // para que la vista solo lo imprima (ver SEPARACIÓN DE CAPAS),
+        // en vez de que repita la cuenta ella misma.
+        $desde = $resultado['total'] > 0
+            ? (($filtros['paged'] - 1) * self::MOVIMIENTOS_POR_PAGINA) + 1
+            : 0;
+        $hasta = min($filtros['paged'] * self::MOVIMIENTOS_POR_PAGINA, $resultado['total']);
 
         return [
             'filtros'                    => $filtros,
@@ -441,7 +469,7 @@ class LibroManagement
             // Por eso es el árbol puro de arbol_de(), sin las dos
             // opciones extra que sí lleva categoria_opciones_filtro().
             'categoria_opciones_destino' => Categoria::get_instance()->arbol_de($user_id),
-            'movimientos'                => $this->movimientos_filtrados($filtros, $user_id),
+            'movimientos'                => $resultado['filas'],
             'error'                      => $this->message('error'),
             'success'                    => (bool) $this->message('ok'),
             'recategorizados'            => isset($_GET['ok']) ? absint($_GET['ok']) : 0,
@@ -449,6 +477,16 @@ class LibroManagement
             'nonce_action'               => self::ACTION_RECATEGORIZAR,
             'nonce_name'                 => self::NONCE_NAME,
             'redirect_to'                => $this->current_url(),
+            // Solo tiene sentido pintar controles de paginación con
+            // más de una página — la vista decide eso mirando
+            // total_paginas, no hace falta un booleano aparte acá.
+            'paginacion'                 => [
+                'actual'            => $filtros['paged'],
+                'total_paginas'     => $resultado['paginas'],
+                'total_movimientos' => $resultado['total'],
+                'desde'             => $desde,
+                'hasta'             => $hasta,
+            ],
         ];
     }
 
@@ -460,23 +498,56 @@ class LibroManagement
      * hace falta un valor "por defecto" no vacío (como el año actual):
      * el tope natural sigue siendo "todas las propias billeteras".
      *
-     * @return array{billetera_id:int, fecha_desde:string, fecha_hasta:string, monto_desde:string, monto_hasta:string, categoria_filtro:string, texto:string}
+     * `paged` no es parte del FILTRO en sentido estricto (no acota qué
+     * movimientos matchean), pero viaja en el mismo array porque
+     * cambia igual qué se lista — y porque así movimientos_filtrados()
+     * recibe un solo array con todo lo que necesita para armar la
+     * consulta, en vez de un parámetro aparte. Se lee acá, no en
+     * normalizar_filtros(), porque paginar solo tiene sentido para el
+     * listado (GET) — "Aplicar a TODOS" (ver handle_recategorizar())
+     * vuelve a leer los mismos filtros desde POST, pero ignora
+     * cualquier noción de página: actúa sobre el conjunto COMPLETO.
+     *
+     * @return array{billetera_id:int, fecha_desde:string, fecha_hasta:string, monto_desde:string, monto_hasta:string, categoria_filtro:string, texto:string, paged:int}
      */
     private function filtros_mantenimiento()
     {
+        $filtros          = $this->normalizar_filtros($_GET);
+        $filtros['paged'] = isset($_GET['paged']) ? max(1, absint($_GET['paged'])) : 1;
+
+        return $filtros;
+    }
+
+    /**
+     * Misma normalización de filtros, a partir de un array cualquiera
+     * en vez de $_GET directo — la usa filtros_mantenimiento() (con
+     * $_GET, para el listado) y handle_recategorizar() (con $_POST,
+     * para "Aplicar a TODOS los que coinciden": ese botón manda los
+     * filtros actuales como campos ocultos del formulario — ver la
+     * vista — porque su form es POST, no puede reusar la querystring
+     * de la URL como sí hace el listado).
+     *
+     * Se extrae solo ahora que existe este segundo caso que
+     * literalmente necesita la misma normalización — antes de esto
+     * hubiera sido generalizar sobre un solo uso, ver SRP APLICADO.
+     *
+     * @return array{billetera_id:int, fecha_desde:string, fecha_hasta:string, monto_desde:string, monto_hasta:string, categoria_filtro:string, texto:string}
+     */
+    private function normalizar_filtros($origen)
+    {
         return [
-            'billetera_id' => isset($_GET['billetera_id']) ? absint($_GET['billetera_id']) : 0,
-            'fecha_desde'  => isset($_GET['fecha_desde']) ? sanitize_text_field(wp_unslash($_GET['fecha_desde'])) : '',
-            'fecha_hasta'  => isset($_GET['fecha_hasta']) ? sanitize_text_field(wp_unslash($_GET['fecha_hasta'])) : '',
-            'monto_desde'  => isset($_GET['monto_desde']) ? sanitize_text_field(wp_unslash($_GET['monto_desde'])) : '',
-            'monto_hasta'  => isset($_GET['monto_hasta']) ? sanitize_text_field(wp_unslash($_GET['monto_hasta'])) : '',
+            'billetera_id' => isset($origen['billetera_id']) ? absint($origen['billetera_id']) : 0,
+            'fecha_desde'  => isset($origen['fecha_desde']) ? sanitize_text_field(wp_unslash($origen['fecha_desde'])) : '',
+            'fecha_hasta'  => isset($origen['fecha_hasta']) ? sanitize_text_field(wp_unslash($origen['fecha_hasta'])) : '',
+            'monto_desde'  => isset($origen['monto_desde']) ? sanitize_text_field(wp_unslash($origen['monto_desde'])) : '',
+            'monto_hasta'  => isset($origen['monto_hasta']) ? sanitize_text_field(wp_unslash($origen['monto_hasta'])) : '',
             // '' = Cualquiera, '0' = Sin categorización, cualquier otro
             // valor = un term_id — por eso viaja como string y nunca
             // como absint(): absint('') y absint('0') dan los dos 0, y
             // acá son dos estados distintos que hay que poder separar
-            // (ver categoria_opciones_filtro() y movimientos_filtrados()).
-            'categoria_filtro' => isset($_GET['categoria_filtro']) ? sanitize_text_field(wp_unslash($_GET['categoria_filtro'])) : '',
-            'texto'             => isset($_GET['texto']) ? sanitize_text_field(wp_unslash($_GET['texto'])) : '',
+            // (ver categoria_opciones_filtro() y construir_args_filtro()).
+            'categoria_filtro' => isset($origen['categoria_filtro']) ? sanitize_text_field(wp_unslash($origen['categoria_filtro'])) : '',
+            'texto'             => isset($origen['texto']) ? sanitize_text_field(wp_unslash($origen['texto'])) : '',
         ];
     }
 
@@ -550,9 +621,17 @@ class LibroManagement
     }
 
     /**
-     * Movimientos propios que matchean todos los filtros presentes —
-     * cada criterio resuelto con capacidades 100% nativas de WP_Query,
-     * sin SQL propio (ver PRINCIPIO RECTOR):
+     * Arma el `$args` de WP_Query a partir de los filtros normalizados
+     * — cada criterio resuelto con capacidades 100% nativas de
+     * WP_Query, sin SQL propio (ver PRINCIPIO RECTOR). Extraída de
+     * movimientos_filtrados() (que solo agrega paginación encima) para
+     * que movimiento_ids_filtrados() la reuse tal cual, sin paginar —
+     * la necesita "Aplicar a TODOS los que coinciden" (ver
+     * handle_recategorizar()), que actúa sobre el conjunto COMPLETO
+     * del filtro, no solo la página que se está viendo. Recién ahora
+     * que existe este segundo caso que de verdad la necesita tiene
+     * sentido esta extracción — antes hubiera sido generalizar sobre
+     * un solo uso (ver SRP APLICADO).
      *
      * - Billetera: `post_parent`, solo si se eligió una puntual (y es
      *   propia — ver billetera_propia()); "todas" no agrega nada,
@@ -600,18 +679,21 @@ class LibroManagement
      * confiar solo en que `$filtros['billetera_id']` llegue siempre
      * validado.
      *
-     * @return array<int,array>
+     * Deliberadamente sin `posts_per_page`, `paged` ni `no_found_rows`:
+     * eso lo decide cada llamador según lo que necesite (paginado y
+     * contado, para el listado; todo de una y solo IDs, para el bloque
+     * completo).
+     *
+     * @return array
      */
-    private function movimientos_filtrados($filtros, $user_id)
+    private function construir_args_filtro($filtros, $user_id)
     {
         $args = [
-            'post_type'      => Libro::POST_TYPE,
-            'author'         => $user_id,
-            'post_status'    => 'publish',
-            'posts_per_page' => -1,
-            'orderby'        => 'date',
-            'order'          => 'DESC',
-            'no_found_rows'  => true,
+            'post_type'   => Libro::POST_TYPE,
+            'author'      => $user_id,
+            'post_status' => 'publish',
+            'orderby'     => 'date',
+            'order'       => 'DESC',
         ];
 
         if ($filtros['billetera_id'] && $this->billetera_propia($filtros['billetera_id'], $user_id)) {
@@ -681,10 +763,34 @@ class LibroManagement
             $args['s'] = $filtros['texto'];
         }
 
-        $movimientos = get_posts($args);
+        return $args;
+    }
+
+    /**
+     * Movimientos propios que matchean el filtro, YA paginados — capa
+     * fina sobre construir_args_filtro() (ver su docblock para el
+     * detalle de cada criterio) que solo agrega lo específico de
+     * PAGINAR (MOVIMIENTOS_POR_PAGINA por página, ver su docblock
+     * sobre por qué hace falta). Arma un WP_Query en vez de usar
+     * get_posts(): get_posts() no devuelve el total de resultados ni
+     * la cantidad de páginas, y la vista los necesita para pintar los
+     * controles de paginación (`no_found_rows` en `false` a
+     * propósito, para que WordPress SÍ calcule ese total).
+     *
+     * @return array{filas:array<int,array>, total:int, paginas:int}
+     */
+    private function movimientos_filtrados($filtros, $user_id)
+    {
+        $args = $this->construir_args_filtro($filtros, $user_id);
+
+        $args['posts_per_page'] = self::MOVIMIENTOS_POR_PAGINA;
+        $args['paged']          = $filtros['paged'];
+        $args['no_found_rows']  = false;
+
+        $query = new WP_Query($args);
 
         $filas = [];
-        foreach ($movimientos as $movimiento) {
+        foreach ($query->posts as $movimiento) {
             $filas[] = [
                 'id'              => $movimiento->ID,
                 'billetera_id'    => (int) $movimiento->post_parent,
@@ -696,7 +802,36 @@ class LibroManagement
             ];
         }
 
-        return $filas;
+        return [
+            'filas'   => $filas,
+            'total'   => (int) $query->found_posts,
+            'paginas' => (int) $query->max_num_pages,
+        ];
+    }
+
+    /**
+     * TODOS los IDs de movimientos propios que matchean el filtro, sin
+     * paginar — lo que necesita "Aplicar a TODOS los que coinciden"
+     * (ver handle_recategorizar()) para actuar sobre el conjunto
+     * COMPLETO del filtro, no solo la página que se está viendo.
+     *
+     * get_posts() en vez de WP_Query acá: a diferencia de
+     * movimientos_filtrados(), este llamador no necesita found_posts ni
+     * max_num_pages (no pagina), solo la lista de IDs — por eso
+     * `fields => 'ids'` y `no_found_rows => true`, para no hacerle
+     * calcular a WordPress un total que nadie va a leer.
+     *
+     * @return array<int,int>
+     */
+    private function movimiento_ids_filtrados($filtros, $user_id)
+    {
+        $args = $this->construir_args_filtro($filtros, $user_id);
+
+        $args['posts_per_page'] = -1;
+        $args['no_found_rows']  = true;
+        $args['fields']         = 'ids';
+
+        return get_posts($args);
     }
 
     /**
@@ -709,17 +844,34 @@ class LibroManagement
      * un camino donde "no elegiste nada" se trate como "dejalos sin
      * categoría".
      *
-     * Revalida cada movimiento_id del lado del servidor — nunca confía
-     * en qué checkboxes llegaron marcados desde el HTML (eso es
-     * presentación, no seguridad, ver CRUD Y SEGURIDAD): tiene que ser
-     * un movimiento de Libro Y de una billetera de ESTE usuario.
-     * Comparación DIRECTA de post_author (no current_user_can) a
-     * propósito, mismo criterio que Categoria::pertenece_a(): esta
-     * pantalla es "siempre las propias billeteras" incluso para
-     * sgf_editor o Administrador General (Edwin lo confirmó
-     * explícito) — current_user_can('edit_post', …) dejaría pasar
-     * movimientos ajenos que un editor administra, que acá no
-     * corresponden.
+     * Dos modos, elegidos por cuál de los dos botones envió el
+     * formulario (`name="modo"`, ver la vista — sin JavaScript, mismo
+     * criterio que el resto del CRUD):
+     *
+     * - 'pagina' (default): los IDs vienen de los checkboxes tildados
+     *   en la página actual (`$_POST['movimiento_ids']`) — datos
+     *   arbitrarios enviados por el cliente, así que cada uno se
+     *   revalida del lado del servidor: tiene que ser un movimiento de
+     *   Libro Y de una billetera de ESTE usuario. Comparación DIRECTA
+     *   de post_author (no current_user_can) a propósito, mismo
+     *   criterio que Categoria::pertenece_a(): esta pantalla es
+     *   "siempre las propias billeteras" incluso para sgf_editor o
+     *   Administrador General (Edwin lo confirmó explícito) —
+     *   current_user_can('edit_post', …) dejaría pasar movimientos
+     *   ajenos que un editor administra, que acá no corresponden.
+     *
+     * - 'todos': los IDs vienen de movimiento_ids_filtrados(), una
+     *   consulta armada del lado del servidor con `author => $user_id`
+     *   ya adentro (ver construir_args_filtro()) — no son datos que
+     *   mandó el cliente, son el resultado de una consulta que este
+     *   mismo código acaba de correr, así que no hace falta repetir el
+     *   chequeo de propiedad por cada ID: revalidar ahí sería
+     *   desconfiar de una consulta propia, no de una entrada externa
+     *   (la revalidación de CRUD Y SEGURIDAD es sobre lo que llega del
+     *   cliente, no sobre todo dato sin importar su origen). Los
+     *   filtros en sí SÍ pasan por normalizar_filtros() +
+     *   construir_args_filtro(), que ya sanitizan y validan cada
+     *   criterio igual que en el listado.
      */
     public function handle_recategorizar()
     {
@@ -732,8 +884,14 @@ class LibroManagement
             $this->back_mantenimiento_con_error('categoria_invalida');
         }
 
-        $ids = isset($_POST['movimiento_ids']) ? array_map('absint', (array) wp_unslash($_POST['movimiento_ids'])) : [];
-        $ids = array_filter(array_unique($ids));
+        $modo = (isset($_POST['modo']) && $_POST['modo'] === 'todos') ? 'todos' : 'pagina';
+
+        if ($modo === 'todos') {
+            $ids = $this->movimiento_ids_filtrados($this->normalizar_filtros($_POST), $user_id);
+        } else {
+            $ids = isset($_POST['movimiento_ids']) ? array_map('absint', (array) wp_unslash($_POST['movimiento_ids'])) : [];
+            $ids = array_filter(array_unique($ids));
+        }
 
         if (empty($ids)) {
             $this->back_mantenimiento_con_error('sin_seleccion');
@@ -741,10 +899,12 @@ class LibroManagement
 
         $actualizados = 0;
         foreach ($ids as $movimiento_id) {
-            $movimiento = get_post($movimiento_id);
+            if ($modo === 'pagina') {
+                $movimiento = get_post($movimiento_id);
 
-            if (!$movimiento || $movimiento->post_type !== Libro::POST_TYPE || (int) $movimiento->post_author !== $user_id) {
-                continue;
+                if (!$movimiento || $movimiento->post_type !== Libro::POST_TYPE || (int) $movimiento->post_author !== $user_id) {
+                    continue;
+                }
             }
 
             wp_set_object_terms($movimiento_id, [$categoria_id], Categoria::TAXONOMY, false);

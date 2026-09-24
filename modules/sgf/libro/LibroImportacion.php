@@ -75,12 +75,20 @@ if (!defined('ABSPATH')) {
  * reporta con su motivo ("Fila N: ..."), pero no aborta el archivo
  * completo — las demás filas válidas sí se insertan.
  *
- * Duplicados (confirmado): una fila se rechaza igual que cualquier
- * otro error de validación si ya existe, en la MISMA billetera, un
- * movimiento con exactamente la misma Fecha, Descripción, Debe y
- * Haber — ver existe_movimiento_duplicado(). Nunca se inserta "por
- * las dudas": el mismo archivo subido dos veces, o una fila que ya se
- * había cargado a mano, no duplica nada.
+ * Duplicados (confirmado, afinado): una fila se rechaza si ya existe,
+ * en la MISMA billetera, otro movimiento con exactamente la misma
+ * Fecha + Monto (`_monto`, el con signo: Haber − Debe) + Referencia —
+ * ver existe_duplicado(). La Referencia sola no alcanza (criterio
+ * anterior): un mismo número de referencia puede repetirse
+ * legítimamente en fechas o montos distintos (una cuota, un pago
+ * recurrente), así que lo que identifica de verdad una transacción
+ * única es la combinación de los tres datos, no la Referencia
+ * aislada. La Referencia sigue sin ser opcional (ver insertar_fila()):
+ * sin ella no hay nada contra qué comparar, así que una fila sin
+ * Referencia se rechaza (código 'referencia_vacia') antes de llegar
+ * al chequeo de duplicado. Nunca se inserta "por las dudas": el mismo
+ * archivo subido dos veces, o una fila que ya se había cargado a
+ * mano, no duplica nada.
  *
  * `_debe`/`_haber` viajan como columnas propias del archivo — el
  * propio docblock original de Libro::register_post_meta() ya
@@ -90,6 +98,13 @@ if (!defined('ABSPATH')) {
  * calcular `_debe`/`_haber` (ver LibroManagement::handle_save()), acá
  * se parte de Debe y Haber (ambos positivos en el archivo) para
  * calcular `_monto = Haber − Debe`.
+ *
+ * Debe/Haber, formato de miles y decimales (confirmado): coma como
+ * separador de miles, punto como decimal ("1,234.56"), igual que
+ * exporta el Excel real de Edwin — nunca el criterio contrario, para
+ * no interpretar mal un monto en silencio (mismo motivo que con la
+ * Fecha). Un guion solo ("-") es el cero de Excel en formato
+ * contable y se trata como 0, no como error — ver parsear_monto().
  *
  * Fecha: se exige `AAAA-MM-DD` exacto (regex + checkdate() nativo),
  * nunca `strtotime()` adivinando un formato — un Excel exportado en
@@ -144,6 +159,7 @@ class LibroImportacion
         'fecha_formato',
         'fecha_invalida',
         'descripcion_vacia',
+        'referencia_vacia',
         'montos_no_numericos',
         'duplicado',
         'error_wp',
@@ -519,10 +535,12 @@ class LibroImportacion
                 return __('Esa fecha no existe.', 'egc');
             case 'descripcion_vacia':
                 return __('La descripción no puede quedar vacía.', 'egc');
+            case 'referencia_vacia':
+                return __('La referencia no puede quedar vacía.', 'egc');
             case 'montos_no_numericos':
                 return __('Debe y Haber tienen que ser números.', 'egc');
             case 'duplicado':
-                return __('Ya existe un movimiento igual (misma fecha, descripción, debe y haber) en esa billetera.', 'egc');
+                return __('Ya existe un movimiento con esa misma fecha, monto y referencia en esa billetera.', 'egc');
             case 'error_wp':
                 return __('No se pudo guardar el movimiento.', 'egc');
             default:
@@ -581,16 +599,20 @@ class LibroImportacion
     }
 
     /**
-     * Si ya existe, dentro de la MISMA billetera, un movimiento con
-     * exactamente la misma Fecha, Descripción, Debe y Haber —
-     * criterio que confirmó Edwin para no duplicar una carga repetida
-     * por accidente (el mismo archivo subido dos veces, o una fila
-     * que ya se había cargado a mano o en una importación anterior).
-     * `title` en get_posts() compara post_title EXACTO (no es una
-     * búsqueda parcial como `s`), así que hace falta que la
-     * Descripción coincida letra por letra — coherente con que
-     * también se exige que Fecha, Debe y Haber coincidan los cuatro
-     * a la vez, no alguno solo.
+     * Si ya existe, dentro de la MISMA billetera, otro movimiento con
+     * exactamente la misma Fecha + Monto (`_monto`, con signo: Haber −
+     * Debe) + Referencia — criterio afinado (Edwin lo confirmó): la
+     * Referencia sola no alcanza, porque un mismo número de referencia
+     * puede repetirse legítimamente en fechas o montos distintos (una
+     * cuota, un pago recurrente); lo que identifica una transacción
+     * única de verdad es la combinación de los tres.
+     *
+     * Alcance confirmado: acotado a la billetera (`post_parent`), no
+     * a todo el sistema — dos billeteras distintas podrían coincidir
+     * en Fecha+Monto+Referencia sin que sea un error real.
+     *
+     * La Referencia sigue sin ser opcional (ver insertar_fila()): sin
+     * ella no hay nada contra qué comparar acá.
      *
      * De paso, sin código extra: como cada fila se inserta con
      * wp_insert_post() apenas se valida (ver insertar_fila()), un
@@ -599,13 +621,12 @@ class LibroImportacion
      * filas idénticas DENTRO del mismo CSV también se detectan entre
      * sí, no solo contra lo que ya había antes de importar.
      */
-    private function existe_movimiento_duplicado($billetera_id, $año, $mes, $dia, $descripcion, $debe, $haber)
+    private function existe_duplicado($billetera_id, $año, $mes, $dia, $monto, $referencia)
     {
         $existentes = get_posts([
             'post_type'      => Libro::POST_TYPE,
             'post_parent'    => $billetera_id,
             'post_status'    => 'publish',
-            'title'          => $descripcion,
             'posts_per_page' => 1,
             'no_found_rows'  => true,
             'fields'         => 'ids',
@@ -618,21 +639,60 @@ class LibroImportacion
             ],
             'meta_query' => [
                 [
-                    'key'     => '_debe',
-                    'value'   => $debe,
+                    'key'     => '_monto',
+                    'value'   => $monto,
                     'type'    => 'NUMERIC',
                     'compare' => '=',
                 ],
                 [
-                    'key'     => '_haber',
-                    'value'   => $haber,
-                    'type'    => 'NUMERIC',
+                    'key'     => '_referencia',
+                    'value'   => $referencia,
                     'compare' => '=',
                 ],
             ],
         ]);
 
         return !empty($existentes);
+    }
+
+    /**
+     * Convierte el texto de una celda Debe/Haber a float, o null si
+     * no tiene un formato válido — separado de insertar_fila() porque
+     * la misma regla aplica a las dos columnas.
+     *
+     * Formato de miles/decimales (confirmado con Edwin, viendo cómo
+     * exporta su Excel real): coma como separador de miles, punto
+     * como decimal — "1,234.56" son mil doscientos treinta y cuatro
+     * con cincuenta y seis, nunca el criterio contrario (punto de
+     * miles, coma decimal). Mismo motivo que con la fecha: el mismo
+     * texto puede leerse de dos formas distintas según el criterio
+     * que se asuma, así que no se adivina — se exige un único formato
+     * y se valida con regex ANTES de castear a float. `is_numeric()`
+     * solo, sin este paso previo, no alcanza: aceptaría "1,234.56"
+     * como texto pero (float) lo trunca mal (interpreta solo el "1",
+     * porque la coma no es un separador numérico válido en PHP) — acá
+     * primero se confirma que el texto tiene el formato exacto
+     * esperado, y recién después se le quitan las comas de miles para
+     * castear.
+     *
+     * Vacío, o un guion solo ("-", el cero de Excel en formato
+     * contable — así llegan Debe y Haber cuando el monto es cero en
+     * el archivo real, y Edwin confirmó tratarlo así en vez de pedirle
+     * que edite el archivo): 0.0, válido.
+     *
+     * @return float|null
+     */
+    private function parsear_monto($texto)
+    {
+        if ($texto === '' || $texto === '-') {
+            return 0.0;
+        }
+
+        if (!preg_match('/^-?\d{1,3}(,\d{3})*(\.\d{1,2})?$/', $texto)) {
+            return null;
+        }
+
+        return (float) str_replace(',', '', $texto);
     }
 
     /**
@@ -662,6 +722,9 @@ class LibroImportacion
      * post_author del movimiento insertado: la DUEÑA real de la
      * billetera (resuelta por billeteras_permitidas()), nunca quien
      * está importando — ver el docblock de la clase sobre por qué.
+     *
+     * Debe/Haber: ver parsear_monto() sobre el formato de miles y
+     * decimales que se exige.
      *
      * @return array{ok:true, post_id:int, billetera_id:int}|array{ok:false, codigo:string, billetera_id_original?:string}
      */
@@ -699,18 +762,30 @@ class LibroImportacion
             return ['ok' => false, 'codigo' => 'descripcion_vacia'];
         }
 
-        $debe_texto  = str_replace(',', '.', $fila['debe']);
-        $haber_texto = str_replace(',', '.', $fila['haber']);
+        // La Referencia sigue sin ser opcional (Edwin lo confirmó): es
+        // parte del criterio de duplicado (ver existe_duplicado()), así
+        // que sin ella no hay nada contra qué comparar — se rechaza
+        // antes de llegar a ese chequeo, no después.
+        $referencia = sanitize_text_field($fila['referencia']);
+        if ($referencia === '') {
+            return ['ok' => false, 'codigo' => 'referencia_vacia'];
+        }
 
-        if (($debe_texto !== '' && !is_numeric($debe_texto)) || ($haber_texto !== '' && !is_numeric($haber_texto))) {
+        $debe  = $this->parsear_monto($fila['debe']);
+        $haber = $this->parsear_monto($fila['haber']);
+
+        if ($debe === null || $haber === null) {
             return ['ok' => false, 'codigo' => 'montos_no_numericos'];
         }
 
-        $debe  = $debe_texto !== '' ? abs(round((float) $debe_texto, 2)) : 0.0;
-        $haber = $haber_texto !== '' ? abs(round((float) $haber_texto, 2)) : 0.0;
+        $debe  = abs(round($debe, 2));
+        $haber = abs(round($haber, 2));
         $monto = round($haber - $debe, 2);
 
-        if ($this->existe_movimiento_duplicado($billetera_id, $año, $mes, $dia, $descripcion, $debe, $haber)) {
+        // El criterio de duplicado es Fecha + Monto + Referencia (ver
+        // existe_duplicado()): hace falta $monto ya calculado, por eso
+        // este chequeo va después de parsear Debe/Haber, no antes.
+        if ($this->existe_duplicado($billetera_id, $año, $mes, $dia, $monto, $referencia)) {
             return ['ok' => false, 'codigo' => 'duplicado'];
         }
 
@@ -725,7 +800,7 @@ class LibroImportacion
                 '_monto'      => $monto,
                 '_haber'      => $haber,
                 '_debe'       => $debe,
-                '_referencia' => sanitize_text_field($fila['referencia']),
+                '_referencia' => $referencia,
             ],
         ];
 
