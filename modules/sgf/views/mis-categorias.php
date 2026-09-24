@@ -9,7 +9,7 @@ if (!defined('ABSPATH')) {
 $manager = CategoriaManagement::get_instance();
 $state   = $manager->view_state();
 ?>
-<div class="container py-5" style="max-width: 720px;">
+<div class="container py-5">
     <h1 class="h3 mb-4"><?php esc_html_e('Mis categorías', 'egc'); ?></h1>
 
     <?php if ($state['success']) : ?>
@@ -104,7 +104,7 @@ $state   = $manager->view_state();
                                 <?php endif; ?>
                             <?php endif; ?>
                         </td>
-                        <td class="text-end" style="width: 1%; white-space: nowrap;">
+                        <td class="text-end text-nowrap">
                             <?php if (!$fila['es_tipo']) : ?>
                                 <?php include EGC_DIR . '/modules/sgf/views/partials/categoria-actions.php'; ?>
                             <?php endif; ?>

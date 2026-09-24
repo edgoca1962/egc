@@ -19,7 +19,7 @@ if (!defined('ABSPATH')) {
  * que post-actions.php no contempla (sustituir).
  */
 ?>
-<div class="d-inline-flex flex-wrap gap-1 align-items-center">
+<div class="d-inline-flex gap-1 align-items-center">
     <a class="btn btn-sm btn-outline-primary"
        href="<?php echo esc_url($fila['editar_url']); ?>"
        aria-label="<?php esc_attr_e('Renombrar', 'egc'); ?>"
@@ -50,7 +50,7 @@ if (!defined('ABSPATH')) {
                 <input type="hidden" name="action" value="<?php echo esc_attr($state['action_sustituir']); ?>">
                 <input type="hidden" name="term_id" value="<?php echo esc_attr($fila['id']); ?>">
                 <input type="hidden" name="redirect_to" value="<?php echo esc_url($state['redirect_to']); ?>">
-                <select name="sustituto_id" class="form-select form-select-sm" style="width: auto;" required>
+                <select name="sustituto_id" class="form-select form-select-sm w-auto" required>
                     <option value=""><?php esc_html_e('Sustituir por…', 'egc'); ?></option>
                     <?php foreach ($fila['candidatos_sustituto'] as $candidato) : ?>
                         <option value="<?php echo esc_attr($candidato['id']); ?>">

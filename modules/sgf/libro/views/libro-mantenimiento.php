@@ -210,50 +210,67 @@ $filtros = $state['filtros'];
             </div>
 
             <div class="card">
-                <div class="card-body d-flex flex-wrap gap-2 align-items-end">
-                    <div class="flex-grow-1" style="max-width: 360px;">
-                        <label class="form-label" for="categoria_id"><?php esc_html_e('Nueva categorización', 'egc'); ?></label>
-                        <?php // Sin opción de "quitar categorización": Edwin fue
-                        // explícito en que esta pantalla siempre ASIGNA — el
-                        // placeholder no es una opción válida, solo obliga a
-                        // elegir una categoría real antes de poder aplicar (ver
-                        // LibroManagement::handle_recategorizar()). ?>
-                        <select class="form-select" id="categoria_id" name="categoria_id" required>
-                            <option value="" disabled selected>
-                                <?php esc_html_e('Seleccionar Categorización', 'egc'); ?>
-                            </option>
-                            <?php foreach ($state['categoria_opciones_destino'] as $categoria) : ?>
-                                <option value="<?php echo esc_attr($categoria['id']); ?>">
-                                    <?php echo esc_html(str_repeat('— ', $categoria['profundidad']) . $categoria['nombre']); ?>
+                <?php
+                /**
+                 * `row g-2` en vez de `d-flex flex-wrap gap-2`: mismo
+                 * grid de Bootstrap que ya usa el filtro GET de más
+                 * arriba en esta misma vista, así el ancho del
+                 * `<select>` de destino lo resuelven las clases
+                 * `col-*` responsivas en vez de un `max-width` fijo en
+                 * px (Edwin pidió no usar `style` para nada que
+                 * Bootstrap ya resuelva con sus propias clases).
+                 */
+                ?>
+                <div class="card-body">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-12 col-sm-6 col-lg-4">
+                            <label class="form-label" for="categoria_id"><?php esc_html_e('Nueva categorización', 'egc'); ?></label>
+                            <?php // Sin opción de "quitar categorización": Edwin fue
+                            // explícito en que esta pantalla siempre ASIGNA — el
+                            // placeholder no es una opción válida, solo obliga a
+                            // elegir una categoría real antes de poder aplicar (ver
+                            // LibroManagement::handle_recategorizar()). ?>
+                            <select class="form-select" id="categoria_id" name="categoria_id" required>
+                                <option value="" disabled selected>
+                                    <?php esc_html_e('Seleccionar Categorización', 'egc'); ?>
                                 </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <?php
-                    /**
-                     * Dos botones submit, mismo `<form>`, distinguidos
-                     * por su `name`/`value` — patrón nativo de HTML
-                     * (name="modo" viaja con el valor del botón que se
-                     * apretó, no de los dos) en vez de JavaScript, mismo
-                     * criterio que el resto del CRUD ("JavaScript no es
-                     * requisito"). LibroManagement::handle_recategorizar()
-                     * lee $_POST['modo'] para elegir entre revalidar los
-                     * IDs tildados o recalcular el conjunto completo del
-                     * filtro del lado del servidor.
-                     */
-                    ?>
-                    <button type="submit" name="modo" value="pagina" class="btn btn-primary">
-                        <?php esc_html_e('Aplicar a los movimientos tildados', 'egc'); ?>
-                    </button>
-                    <button type="submit" name="modo" value="todos" class="btn btn-outline-primary">
+                                <?php foreach ($state['categoria_opciones_destino'] as $categoria) : ?>
+                                    <option value="<?php echo esc_attr($categoria['id']); ?>">
+                                        <?php echo esc_html(str_repeat('— ', $categoria['profundidad']) . $categoria['nombre']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
                         <?php
-                        printf(
-                            /* translators: %d: cantidad total de movimientos que coinciden con el filtro actual */
-                            esc_html__('Aplicar a TODOS los que coinciden (%d)', 'egc'),
-                            (int) $paginacion['total_movimientos']
-                        );
+                        /**
+                         * Dos botones submit, mismo `<form>`, distinguidos
+                         * por su `name`/`value` — patrón nativo de HTML
+                         * (name="modo" viaja con el valor del botón que se
+                         * apretó, no de los dos) en vez de JavaScript, mismo
+                         * criterio que el resto del CRUD ("JavaScript no es
+                         * requisito"). LibroManagement::handle_recategorizar()
+                         * lee $_POST['modo'] para elegir entre revalidar los
+                         * IDs tildados o recalcular el conjunto completo del
+                         * filtro del lado del servidor.
+                         */
                         ?>
-                    </button>
+                        <div class="col-auto">
+                            <button type="submit" name="modo" value="pagina" class="btn btn-primary">
+                                <?php esc_html_e('Aplicar a los movimientos tildados', 'egc'); ?>
+                            </button>
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" name="modo" value="todos" class="btn btn-outline-primary">
+                                <?php
+                                printf(
+                                    /* translators: %d: cantidad total de movimientos que coinciden con el filtro actual */
+                                    esc_html__('Aplicar a TODOS los que coinciden (%d)', 'egc'),
+                                    (int) $paginacion['total_movimientos']
+                                );
+                                ?>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </form>
@@ -265,9 +282,12 @@ $filtros = $state['filtros'];
          * (no es la consulta principal de la página), y
          * the_posts_pagination() solo sabe leer la consulta principal
          * (`$wp_query` global) — paginate_links() es el helper nativo
-         * de WordPress pensado justo para paginar una consulta propia,
-         * y arma el mismo tipo de marcado (clases `page-numbers`) que
-         * the_posts_pagination() ya usa en billetera/views/archive.php.
+         * de WordPress pensado justo para paginar una consulta propia.
+         * Wrapper `nav.navigation.pagination` + `div.nav-links` a
+         * propósito: es el mismo markup que genera the_posts_pagination()
+         * de forma nativa (la usa billetera/views/archive.php), así el
+         * CSS de paginación le sirve a cualquier pantalla del framework
+         * sin reglas separadas por función usada.
          *
          * `base` con add_query_arg('paged', '%#%') arma cada link a
          * partir de la URL actual (que ya trae los filtros aplicados
@@ -277,17 +297,19 @@ $filtros = $state['filtros'];
          */
         ?>
         <?php if ($paginacion['total_paginas'] > 1) : ?>
-            <nav class="mt-4" aria-label="<?php esc_attr_e('Paginación de movimientos', 'egc'); ?>">
-                <?php
-                echo paginate_links([
-                    'base'      => add_query_arg('paged', '%#%'),
-                    'format'    => '',
-                    'current'   => $paginacion['actual'],
-                    'total'     => $paginacion['total_paginas'],
-                    'prev_text' => __('« Anterior', 'egc'),
-                    'next_text' => __('Siguiente »', 'egc'),
-                ]);
-                ?>
+            <nav class="navigation pagination mt-4" aria-label="<?php esc_attr_e('Paginación de movimientos', 'egc'); ?>">
+                <div class="nav-links">
+                    <?php
+                    echo paginate_links([
+                        'base'      => add_query_arg('paged', '%#%'),
+                        'format'    => '',
+                        'current'   => $paginacion['actual'],
+                        'total'     => $paginacion['total_paginas'],
+                        'prev_text' => __('« Anterior', 'egc'),
+                        'next_text' => __('Siguiente »', 'egc'),
+                    ]);
+                    ?>
+                </div>
             </nav>
         <?php endif; ?>
     <?php endif; ?>

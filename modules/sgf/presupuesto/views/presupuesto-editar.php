@@ -14,7 +14,7 @@ if (!$state) {
 
 $año_actual = $state['editing']['año'] ?? (int) gmdate('Y');
 ?>
-<div class="container py-5" style="max-width: 640px;">
+<div class="container py-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="h3 mb-0">
             <?php echo $state['editing']

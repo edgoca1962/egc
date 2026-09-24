@@ -352,28 +352,43 @@ class LibroManagement
     }
 
     /**
-     * Movimientos de una billetera, más nuevo primero — para el
-     * listado del detalle de billetera (billetera/views/single.php).
+     * Movimientos de una billetera, más nuevo primero y paginados —
+     * para el listado del detalle de billetera (billetera/views/single.php).
      * No hay archivo/listado nativo de Libro que pudiera reutilizarse
      * (ver el docblock de la clase): siempre se pide acotado a UNA
      * billetera puntual.
      *
-     * @return array<int,array>
+     * Mismo criterio de paginación que movimientos_filtrados() (misma
+     * constante MOVIMIENTOS_POR_PAGINA, ver su docblock sobre por qué
+     * hace falta): una billetera con una carga histórica grande podía
+     * dejar esta pantalla tan lenta de pintar como el listado sin
+     * filtrar de Mantenimiento. `paged` se resuelve acá adentro, no en
+     * la vista (SEPARACIÓN DE CAPAS: la vista no lee $_GET), mismo
+     * criterio que filtros_mantenimiento().
+     *
+     * WP_Query en vez de get_posts(): hace falta found_posts/max_num_pages
+     * para pintar "Mostrando X–Y de Z" y los controles de paginación,
+     * igual que en movimientos_filtrados().
+     *
+     * @return array{filas:array<int,array>, total:int, paginas:int, paged:int}
      */
     public function movimientos_de($billetera_id)
     {
-        $movimientos = get_posts([
+        $paged = isset($_GET['paged']) ? max(1, absint($_GET['paged'])) : 1;
+
+        $query = new WP_Query([
             'post_type'      => Libro::POST_TYPE,
             'post_parent'    => $billetera_id,
             'post_status'    => 'publish',
-            'posts_per_page' => -1,
             'orderby'        => 'date',
             'order'          => 'DESC',
-            'no_found_rows'  => true,
+            'posts_per_page' => self::MOVIMIENTOS_POR_PAGINA,
+            'paged'          => $paged,
+            'no_found_rows'  => false,
         ]);
 
         $filas = [];
-        foreach ($movimientos as $movimiento) {
+        foreach ($query->posts as $movimiento) {
             $filas[] = [
                 'id'         => $movimiento->ID,
                 'title'      => $movimiento->post_title,
@@ -384,7 +399,12 @@ class LibroManagement
             ];
         }
 
-        return $filas;
+        return [
+            'filas'   => $filas,
+            'total'   => (int) $query->found_posts,
+            'paginas' => (int) $query->max_num_pages,
+            'paged'   => $paged,
+        ];
     }
 
     /**

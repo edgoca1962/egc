@@ -14,7 +14,7 @@ if (!$state) {
 
 $fecha_actual = $state['editing']['fecha'] ?? gmdate('Y-m-d');
 ?>
-<div class="container py-5" style="max-width: 640px;">
+<div class="container py-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h1 class="h3 mb-0">

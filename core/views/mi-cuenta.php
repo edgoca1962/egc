@@ -8,7 +8,8 @@ if (!defined('ABSPATH')) {
 
 $state = Account::get_instance()->view_state();
 ?>
-<div class="container py-5" style="max-width: 480px;">
+<div class="container py-5 col-xxl-3 col-xl-4 col-lg-6 col-md-8 col-sm-10">
+    <h1 class="h3 mb-4"><?php esc_html_e('Mi cuenta', 'egc'); ?></h1>
 
     <?php if ($state['success']): ?>
         <div class="alert alert-success"><?php esc_html_e('Cambios guardados.', 'egc'); ?></div>

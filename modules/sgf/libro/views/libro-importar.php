@@ -16,7 +16,7 @@ if (!defined('ABSPATH')) {
 $manager = LibroImportacion::get_instance();
 $state   = $manager->view_state();
 ?>
-<div class="container py-5" style="max-width: 720px;">
+<div class="container py-5">
     <h1 class="h3 mb-4"><?php esc_html_e('Importar movimientos', 'egc'); ?></h1>
 
     <?php if ($state['resultado']) : ?>

@@ -14,7 +14,7 @@ if (!$state) {
 
 $moneda_actual = $state['editing']['moneda'] ?? array_key_first($state['moneda_opciones']);
 ?>
-<div class="container py-5" style="max-width: 640px;">
+<div class="container py-5">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h1 class="h3 mb-0">
             <?php echo $state['editing']

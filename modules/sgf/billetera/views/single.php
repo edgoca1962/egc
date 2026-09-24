@@ -11,7 +11,7 @@ $manager       = BilleteraManagement::get_instance();
 $libro_manager = LibroManagement::get_instance();
 $back_url      = $manager->back_url();
 ?>
-<article class="container py-5" style="max-width: 640px;">
+<article class="container py-5">
     <a class="btn btn-outline-secondary btn-sm mb-4" href="<?php echo esc_url($back_url); ?>">
         <i class="bi bi-arrow-left" aria-hidden="true"></i>
         <?php esc_html_e('Regresar', 'egc'); ?>
@@ -70,11 +70,29 @@ $back_url      = $manager->back_url();
             <?php endif; ?>
         </div>
 
-        <?php $movimientos = $libro_manager->movimientos_de(get_the_ID()); ?>
+        <?php
+        $resultado   = $libro_manager->movimientos_de(get_the_ID());
+        $movimientos = $resultado['filas'];
+        ?>
 
         <?php if (empty($movimientos)) : ?>
             <p class="text-muted"><?php esc_html_e('Todavía no hay movimientos.', 'egc'); ?></p>
         <?php else : ?>
+            <p class="text-muted">
+                <?php
+                $desde = (($resultado['paged'] - 1) * LibroManagement::MOVIMIENTOS_POR_PAGINA) + 1;
+                $hasta = min($resultado['paged'] * LibroManagement::MOVIMIENTOS_POR_PAGINA, $resultado['total']);
+
+                printf(
+                    /* translators: 1: primer número mostrado, 2: último número mostrado, 3: total de movimientos de esta billetera */
+                    esc_html__('Mostrando %1$d–%2$d de %3$d movimientos.', 'egc'),
+                    (int) $desde,
+                    (int) $hasta,
+                    (int) $resultado['total']
+                );
+                ?>
+            </p>
+
             <div class="table-responsive">
                 <table class="table table-sm align-middle">
                     <thead>
@@ -119,6 +137,36 @@ $back_url      = $manager->back_url();
                     </tbody>
                 </table>
             </div>
+
+            <?php
+            /**
+             * paginate_links() en vez de the_posts_pagination(): esta
+             * pantalla arma un WP_Query propio en
+             * LibroManagement::movimientos_de() (no es la consulta
+             * principal de la página, que acá es la del propio single
+             * de billetera) — ver el mismo comentario en
+             * libro-mantenimiento.php. Wrapper `nav.navigation.pagination`
+             * + `div.nav-links` a propósito: es el mismo markup que
+             * genera the_posts_pagination() de forma nativa, así el CSS
+             * de paginación le sirve a las dos sin reglas separadas.
+             */
+            ?>
+            <?php if ($resultado['paginas'] > 1) : ?>
+                <nav class="navigation pagination mt-4" aria-label="<?php esc_attr_e('Paginación de movimientos', 'egc'); ?>">
+                    <div class="nav-links">
+                        <?php
+                        echo paginate_links([
+                            'base'      => add_query_arg('paged', '%#%'),
+                            'format'    => '',
+                            'current'   => $resultado['paged'],
+                            'total'     => $resultado['paginas'],
+                            'prev_text' => __('« Anterior', 'egc'),
+                            'next_text' => __('Siguiente »', 'egc'),
+                        ]);
+                        ?>
+                    </div>
+                </nav>
+            <?php endif; ?>
         <?php endif; ?>
     <?php endwhile; ?>
 </article>

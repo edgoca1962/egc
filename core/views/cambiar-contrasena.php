@@ -8,13 +8,14 @@ if (!defined('ABSPATH')) {
 
 $state = PasswordChange::get_instance()->view_state();
 ?>
-<div class="container py-5" style="max-width: 480px;">
+<div class="container py-5">
+    <h1 class="h3 mb-4"><?php esc_html_e('Cambiar contraseña', 'egc'); ?></h1>
 
-    <?php if ($state['success']): ?>
+    <?php if ($state['success']) : ?>
         <div class="alert alert-success"><?php esc_html_e('Contraseña actualizada.', 'egc'); ?></div>
     <?php endif; ?>
 
-    <?php if ($state['error']): ?>
+    <?php if ($state['error']) : ?>
         <div class="alert alert-danger"><?php echo esc_html($state['error']); ?></div>
     <?php endif; ?>
 

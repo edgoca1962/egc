@@ -31,10 +31,20 @@ $state   = $manager->view_state_listado();
         <div class="alert alert-danger"><?php echo esc_html($state['error']); ?></div>
     <?php endif; ?>
 
-    <?php // Form GET, sin nonce: no escribe nada, solo cambia qué se lista
-    // — mismo criterio que el filtro de usuario de Billetera. ?>
-    <form method="get" class="d-flex flex-wrap gap-2 align-items-end mb-4">
-        <div>
+    <?php
+    /**
+     * Form GET, sin nonce: no escribe nada, solo cambia qué se lista —
+     * mismo criterio que el filtro de usuario de Billetera. `row g-2`
+     * en vez de `d-flex flex-wrap gap-2`: mismo grid de Bootstrap que
+     * ya usa el filtro de libro-mantenimiento.php, así el ancho del
+     * `<select>` de Usuario lo resuelven las clases `col-*`
+     * responsivas (Edwin pidió no usar `style` para nada que Bootstrap
+     * ya resuelva con sus propias clases) en vez de un `max-width` fijo
+     * en px.
+     */
+    ?>
+    <form method="get" class="row g-2 align-items-end mb-4">
+        <div class="col-auto">
             <label class="form-label" for="anio"><?php esc_html_e('Año', 'egc'); ?></label>
             <select class="form-select form-select-sm" id="anio" name="anio">
                 <?php foreach ($state['año_opciones'] as $año => $etiqueta) : ?>
@@ -45,7 +55,7 @@ $state   = $manager->view_state_listado();
             </select>
         </div>
 
-        <div>
+        <div class="col-auto">
             <label class="form-label" for="mes"><?php esc_html_e('Acumulado hasta', 'egc'); ?></label>
             <select class="form-select form-select-sm" id="mes" name="mes">
                 <?php foreach ($state['mes_opciones'] as $mes => $etiqueta) : ?>
@@ -57,7 +67,7 @@ $state   = $manager->view_state_listado();
         </div>
 
         <?php if ($state['puede_filtrar_usuario'] && !empty($state['usuario_opciones'])) : ?>
-            <div class="flex-grow-1" style="max-width: 280px;">
+            <div class="col-12 col-sm-4 col-lg-3">
                 <label class="form-label" for="usuario"><?php esc_html_e('Usuario', 'egc'); ?></label>
                 <select class="form-select form-select-sm" id="usuario" name="usuario">
                     <?php foreach ($state['usuario_opciones'] as $user_id => $email) : ?>
@@ -69,11 +79,13 @@ $state   = $manager->view_state_listado();
             </div>
         <?php endif; ?>
 
-        <button type="submit" class="btn btn-sm btn-outline-secondary"
-                aria-label="<?php esc_attr_e('Filtrar', 'egc'); ?>"
-                title="<?php esc_attr_e('Filtrar', 'egc'); ?>">
-            <i class="bi bi-funnel" aria-hidden="true"></i>
-        </button>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-outline-secondary"
+                    aria-label="<?php esc_attr_e('Filtrar', 'egc'); ?>"
+                    title="<?php esc_attr_e('Filtrar', 'egc'); ?>">
+                <i class="bi bi-funnel" aria-hidden="true"></i>
+            </button>
+        </div>
     </form>
 
     <?php if (empty($state['monedas'])) : ?>
