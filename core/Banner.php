@@ -68,7 +68,18 @@ class Banner
         return is_singular() ? '' : get_bloginfo('description');
     }
 
-    private function generic_image_url()
+    /**
+     * La imagen de fondo genérica sola — pública porque, además de
+     * usarla attributes() (junto con título/subtítulo), ahora también
+     * la necesita core/views/ingresar.php directo, para su propio
+     * fondo a pantalla completa, sin pasar por attributes() ni por la
+     * consulta a ViewResolver que ese método hace para resolver el
+     * módulo dueño de la página actual (algo que a la pantalla de
+     * login, sin navbar ni banner — ver el docblock de esa vista — no
+     * le importa). Pública recién ahora que existe este segundo
+     * llamador (ver SRP APLICADO).
+     */
+    public function generic_image_url()
     {
         $path = EGC_DIR . '/assets/img/core/banner.jpg';
 

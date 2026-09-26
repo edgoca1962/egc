@@ -8,7 +8,7 @@ if (!defined('ABSPATH')) {
 
 $atributos = Banner::get_instance()->attributes();
 $style = $atributos['image']
-    ? 'background-image:linear-gradient(rgba(0,0,0,0.5),rgba(0,0,0,0.5)),url(' . esc_url($atributos['image']) . ');background-size:cover;background-position:center; height:60dvh;'
+    ? 'background-image:linear-gradient(rgba(0,0,0,0.5),rgba(0,0,0,0.5)),url(' . esc_url($atributos['image']) . ');background-size:cover;background-position:center; height:30dvh;'
     : '';
 ?>
 <div class="egc-banner text-white text-center py-5<?php echo $atributos['image'] ? '' : ' bg-dark'; ?>" <?php echo $style ? 'style="' . esc_attr($style) . '"' : ''; ?>>

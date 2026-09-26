@@ -22,6 +22,19 @@ class LoginPage
 
     const ACTION = 'egc_login';
 
+    /**
+     * Nombre del query var propio para el mensaje de error — a
+     * propósito NO se llama 'error': ese nombre está en la lista
+     * nativa de public query vars de WordPress (WP::$public_query_vars,
+     * en wp-includes/class-wp.php), reservado para el estado interno
+     * de WP_Query. Usarlo hacía que WP::parse_request() lo vaciara de
+     * $_GET en cada petición, antes de que esta clase llegara a leerlo
+     * (headers/cookies/URL mostraban 'error=invalid' correctamente;
+     * $_GET, no). Con un nombre propio del módulo el conflicto
+     * desaparece sin tener que pelear con el motor de queries de WP.
+     */
+    const ERROR_QUERY_VAR = 'login_error';
+
     private $url = null;
 
     private function __construct()
@@ -29,6 +42,24 @@ class LoginPage
         add_action('template_redirect', [$this, 'guard_access']);
         add_action('admin_post_nopriv_' . self::ACTION, [$this, 'handle_submission']);
         add_action('admin_post_' . self::ACTION, [$this, 'handle_submission']);
+
+        // Le dice a index.php que no pinte navbar ni banner en esta
+        // página — ver ocultar_cabecera() y el docblock del filtro en
+        // index.php.
+        add_filter('egc_mostrar_cabecera', [$this, 'ocultar_cabecera']);
+    }
+
+    /**
+     * Filtro de 'egc_mostrar_cabecera' (ver index.php): esta es la
+     * única página que hoy quiere pintarse sin navbar ni banner (ver
+     * el docblock de core/views/ingresar.php), así que solo ella
+     * apaga el valor, y únicamente cuando la página actual es la
+     * suya — nunca pisa lo que haya decidido otro filtro sobre
+     * $mostrar antes de este.
+     */
+    public function ocultar_cabecera($mostrar)
+    {
+        return is_page(self::SLUG) ? false : $mostrar;
     }
 
     /**
@@ -84,7 +115,7 @@ class LoginPage
 
     private function error_message()
     {
-        $error = isset($_GET['error']) ? sanitize_key($_GET['error']) : '';
+        $error = isset($_GET[self::ERROR_QUERY_VAR]) ? sanitize_key($_GET[self::ERROR_QUERY_VAR]) : '';
 
         switch ($error) {
             case 'invalid':
@@ -123,7 +154,7 @@ class LoginPage
 
     private function back_with_error($error)
     {
-        wp_safe_redirect(add_query_arg('error', $error, $this->url()));
+        wp_safe_redirect(add_query_arg(self::ERROR_QUERY_VAR, $error, $this->url()));
         exit;
     }
 }
