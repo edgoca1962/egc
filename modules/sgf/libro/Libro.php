@@ -394,6 +394,16 @@ class Libro
      * `guardar_meta_box()` (o por el `meta_input` de
      * `LibroManagement::handle_save()`, que WordPress procesa antes de
      * disparar `save_post`) para cuando este método lo lee.
+     *
+     * Este es el punto de entrada que reciben los hooks (siempre con
+     * el post_id de un MOVIMIENTO) — resuelve su billetera padre y
+     * delega el cálculo en sí a recalcular_saldo_de(), que es el que
+     * de verdad conoce la fórmula (ver su docblock). Se mantienen
+     * separados porque BilleteraManagement (módulo hermano, ver su
+     * docblock) necesita el segundo punto de entrada directo, con el
+     * ID de la billetera, sin pasar por ningún movimiento — no tiene
+     * sentido pedirle que invente un post_id de Libro para conseguir
+     * lo mismo.
      */
     public function recalcular_saldo_billetera($post_id)
     {
@@ -406,19 +416,54 @@ class Libro
             return;
         }
 
-        $this->guardar_saldo($post->post_parent, $this->calcular_saldo($post->post_parent));
+        $this->recalcular_saldo_de($post->post_parent);
     }
 
     /**
-     * Suma `_monto` de todos los movimientos PUBLICADOS de esta
-     * billetera — recalcula desde cero en vez de sumar/restar
-     * incrementalmente sobre el `_saldo` existente, así un movimiento
-     * editado (el monto cambia) o eliminado nunca deja un residuo mal
-     * sumado. Con la cantidad de movimientos esperable acá, recorrerlos
-     * todos en cada guardado es insignificante.
+     * Punto de entrada público para recalcular el saldo ACTUAL de una
+     * billetera puntual, dado directamente su ID — lo necesita
+     * BilleteraManagement::handle_save() (y Billetera::guardar_meta_box()
+     * en wp-admin) cuando el dueño carga o corrige el SALDO INICIAL de
+     * una billetera (ver el docblock de calcular_saldo() sobre la
+     * diferencia entre `_saldo_inicial` y `_saldo`): ahí no hay ningún
+     * movimiento de por medio que dispare recalcular_saldo_billetera()
+     * vía sus hooks, así que hace falta poder pedirlo directo con el ID
+     * de la billetera. Es el mismo cálculo que ya disparan esos hooks
+     * (ver más arriba), extraído a un método público para tener este
+     * segundo punto de entrada sin duplicar la fórmula.
+     */
+    public function recalcular_saldo_de($billetera_id)
+    {
+        $this->guardar_saldo($billetera_id, $this->calcular_saldo($billetera_id));
+    }
+
+    /**
+     * El saldo ACTUAL de una billetera es `_saldo_inicial` (lo que esa
+     * billetera ya tenía ANTES de empezar a registrarse en la app — un
+     * dato que carga su dueño una sola vez, y que este cálculo nunca
+     * pisa: ver Billetera::register_post_meta()) más la suma de
+     * `_monto` de todos sus movimientos PUBLICADOS.
+     *
+     * Antes de este cambio se arrancaba siempre en 0.0, como si toda
+     * billetera empezara su historia el día en que se carga el primer
+     * movimiento en la app — válido para una billetera nueva, pero
+     * incorrecto para una cuenta que ya venía funcionando (Edwin lo
+     * reportó): en cuanto se guardaba el primer movimiento, este mismo
+     * recálculo pisaba cualquier saldo previo. Sumar `_saldo_inicial`
+     * como base resuelve eso sin tocar en absoluto cómo se guarda cada
+     * movimiento individual.
+     *
+     * Se recalcula desde cero (saldo_inicial + TODOS los movimientos)
+     * en vez de sumar/restar incrementalmente sobre el `_saldo`
+     * existente, así un movimiento editado (el monto cambia) o
+     * eliminado nunca deja un residuo mal sumado. Con la cantidad de
+     * movimientos esperable acá, recorrerlos todos en cada guardado es
+     * insignificante.
      */
     private function calcular_saldo($billetera_id)
     {
+        $saldo = (float) get_post_meta($billetera_id, '_saldo_inicial', true);
+
         $movimientos = get_posts([
             'post_type'      => self::POST_TYPE,
             'post_parent'    => $billetera_id,
@@ -428,7 +473,6 @@ class Libro
             'fields'         => 'ids',
         ]);
 
-        $saldo = 0.0;
         foreach ($movimientos as $movimiento_id) {
             $saldo += (float) get_post_meta($movimiento_id, '_monto', true);
         }

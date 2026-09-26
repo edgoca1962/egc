@@ -3,6 +3,7 @@
 namespace EGC\Modules\Sgf\Billetera;
 
 use EGC\Core\Singleton;
+use EGC\Modules\Sgf\Libro\Libro;
 
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
@@ -17,7 +18,7 @@ if (!defined('ABSPATH')) {
  * capacidades de Billetera no se mezclen con las de ningún otro CPT.
  *
  * Esta clase se limita a declarar el recurso ante WordPress (el CPT y
- * sus dos postmeta). La consulta scoped por usuario, los guards de
+ * sus tres postmeta). La consulta scoped por usuario, los guards de
  * acceso, los handlers de admin-post.php y el `view_state_*()` para
  * las vistas van en una clase aparte (`BilleteraManagement`, paso 4) —
  * son una razón de cambio distinta: esta clase cambia si cambia la
@@ -70,10 +71,22 @@ class Billetera
     }
 
     /**
-     * `_saldo`: numérico con signo — positivo o negativo son ambos
-     * válidos (ver la regla de signos: una cuenta bancaria sobregirada
-     * o una tarjeta de crédito son saldos negativos legítimos), así
-     * que el sanitize_callback normaliza a float sin forzar unsigned.
+     * `_saldo_inicial`: lo que la billetera YA TENÍA antes de empezar a
+     * registrarse en la app — el dueño lo carga una vez (al crearla, o
+     * después si se equivocó), y ningún recálculo automático lo toca
+     * nunca. Con signo, igual que antes: una cuenta sobregirada o una
+     * tarjeta de crédito son saldos iniciales negativos legítimos.
+     *
+     * `_saldo`: el saldo ACTUAL — ya NO lo carga la persona a mano
+     * (antes de este cambio, esta era la única meta y cumplía los dos
+     * roles a la vez: cada movimiento nuevo pisaba por completo
+     * cualquier valor cargado acá, perdiendo el arrastre de una cuenta
+     * con historia previa; ver Libro::calcular_saldo()). Siempre se
+     * escribe con wp_update_post() desde Libro::guardar_saldo(),
+     * derivado de `_saldo_inicial` + la suma de los movimientos — por
+     * eso sigue registrado (para que WordPress conozca el tipo del
+     * dato y su auth_callback), pero ninguna vista lo ofrece como
+     * `<input>` editable.
      *
      * `_moneda`: entero, 1 = Moneda Local, 2 = Moneda Extranjera.
      * `register_post_meta()` no tiene forma de RECHAZAR un valor fuera
@@ -82,8 +95,8 @@ class Billetera
      * BilleteraManagement::handle_save() (paso 4), mismo lugar donde
      * Blog valida el título vacío.
      *
-     * `auth_callback` en ambos: usa `edit_post` sobre el post_id del
-     * meta, para que nadie pueda escribir el saldo o la moneda de una
+     * `auth_callback` en los tres: usa `edit_post` sobre el post_id
+     * del meta, para que nadie pueda escribir estos datos de una
      * billetera ajena por fuera del formulario (defensa en profundidad
      * — el handler de guardado ya lo va a revisar también).
      */
@@ -93,7 +106,7 @@ class Billetera
             return current_user_can('edit_post', $post_id);
         };
 
-        register_post_meta(self::POST_TYPE, '_saldo', [
+        $campo_saldo = [
             'type'              => 'number',
             'single'            => true,
             'default'           => 0,
@@ -102,7 +115,10 @@ class Billetera
                 return round((float) $meta_value, 2);
             },
             'auth_callback' => $auth_callback,
-        ]);
+        ];
+
+        register_post_meta(self::POST_TYPE, '_saldo_inicial', $campo_saldo);
+        register_post_meta(self::POST_TYPE, '_saldo', $campo_saldo);
 
         register_post_meta(self::POST_TYPE, '_moneda', [
             'type'              => 'integer',
@@ -115,12 +131,23 @@ class Billetera
     }
 
     /**
-     * Meta box nativa de wp-admin para _saldo y _moneda — sin esto, el
-     * superusuario (el único que entra a wp-admin, ver AdminGuard) podía
-     * crear o abrir una Billetera ahí pero no tenía forma de tocar estos
-     * dos campos: no son nativos de WordPress (a diferencia del Título,
-     * que sí tiene su campo de fábrica) y register_post_meta() por sí
-     * solo declara el dato, no agrega ninguna UI para editarlo.
+     * Meta box nativa de wp-admin para _saldo_inicial y _moneda — sin
+     * esto, el superusuario (el único que entra a wp-admin, ver
+     * AdminGuard) podía crear o abrir una Billetera ahí pero no tenía
+     * forma de tocar estos campos: no son nativos de WordPress (a
+     * diferencia del Título, que sí tiene su campo de fábrica) y
+     * register_post_meta() por sí solo declara el dato, no agrega
+     * ninguna UI para editarlo.
+     *
+     * El saldo ACTUAL (`_saldo`) se muestra acá también, pero de solo
+     * lectura — nunca como campo del formulario: es un valor derivado
+     * (ver el docblock de register_post_meta() y de
+     * Libro::calcular_saldo()), así que ofrecerlo editable sería
+     * mostrar un control que el próximo movimiento vuelve a pisar sin
+     * avisar. `es_nueva` (billetera todavía no guardada, post_status
+     * 'auto-draft') le dice a la vista que todavía no tiene sentido
+     * mostrar ese dato: antes del primer guardado no hay saldo actual
+     * calculado, solo el que se está por cargar.
      *
      * Nada de HTML acá: arma el estado y delega el marcado a la vista,
      * mismo criterio de separación de capas que el resto del proyecto —
@@ -141,7 +168,9 @@ class Billetera
     public function render_meta_box($post)
     {
         $estado = [
-            'saldo'           => (float) get_post_meta($post->ID, '_saldo', true),
+            'saldo_inicial'   => (float) get_post_meta($post->ID, '_saldo_inicial', true),
+            'saldo_actual'    => (float) get_post_meta($post->ID, '_saldo', true),
+            'es_nueva'        => $post->post_status === 'auto-draft',
             'moneda'          => (int) get_post_meta($post->ID, '_moneda', true) ?: self::MONEDA_LOCAL,
             'moneda_opciones' => [
                 self::MONEDA_LOCAL      => __('Moneda Local', 'egc'),
@@ -156,10 +185,18 @@ class Billetera
 
     /**
      * update_post_meta() ya aplica el sanitize_callback declarado en
-     * register_post_meta() (round a 2 decimales para _saldo, absint
-     * para _moneda) — no hace falta repetir esa sanitización acá, WP ya
-     * la resuelve para cualquier escritura de este meta, venga de
-     * donde venga.
+     * register_post_meta() (round a 2 decimales para _saldo_inicial,
+     * absint para _moneda) — no hace falta repetir esa sanitización
+     * acá, WP ya la resuelve para cualquier escritura de este meta,
+     * venga de donde venga.
+     *
+     * Guarda `_saldo_inicial` (nunca `_saldo` directo, ver el docblock
+     * de register_post_meta()) y delega en
+     * Libro::recalcular_saldo_de() la derivación del saldo actual —
+     * mismo método que usan los hooks de movimientos (ver su
+     * docblock), así que un cambio de saldo inicial en una billetera
+     * que YA tiene movimientos cargados los vuelve a sumar encima del
+     * valor corregido, en vez de solo reemplazar un número.
      *
      * No hace falta guardarse de una revisión: save_post_billetera es
      * un hook dinámico por post_type, y una revisión se guarda con
@@ -183,12 +220,14 @@ class Billetera
             return;
         }
 
-        if (isset($_POST['saldo'])) {
-            update_post_meta($post_id, '_saldo', str_replace(',', '.', wp_unslash($_POST['saldo'])));
+        if (isset($_POST['saldo_inicial'])) {
+            update_post_meta($post_id, '_saldo_inicial', str_replace(',', '.', wp_unslash($_POST['saldo_inicial'])));
         }
 
         if (isset($_POST['moneda']) && in_array((int) $_POST['moneda'], [self::MONEDA_LOCAL, self::MONEDA_EXTRANJERA], true)) {
             update_post_meta($post_id, '_moneda', wp_unslash($_POST['moneda']));
         }
+
+        Libro::get_instance()->recalcular_saldo_de($post_id);
     }
 }

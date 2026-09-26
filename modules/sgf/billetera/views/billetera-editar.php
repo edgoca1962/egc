@@ -55,13 +55,27 @@ $moneda_actual = $state['editing']['moneda'] ?? array_key_first($state['moneda_o
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label" for="saldo"><?php esc_html_e('Saldo', 'egc'); ?></label>
-                    <input class="form-control" type="number" step="0.01" id="saldo" name="saldo"
-                           value="<?php echo esc_attr($state['editing']['saldo'] ?? '0'); ?>">
+                    <label class="form-label" for="saldo_inicial"><?php esc_html_e('Saldo inicial', 'egc'); ?></label>
+                    <input class="form-control" type="number" step="0.01" id="saldo_inicial" name="saldo_inicial"
+                           value="<?php echo esc_attr($state['editing']['saldo_inicial'] ?? '0'); ?>">
                     <p class="form-text">
-                        <?php esc_html_e('Un valor negativo es válido: por ejemplo, una cuenta sobregirada o el saldo pendiente de una tarjeta de crédito.', 'egc'); ?>
+                        <?php esc_html_e('El saldo con el que arrancó esta billetera, antes de empezar a registrar movimientos acá. Un valor negativo es válido: por ejemplo, una cuenta sobregirada o el saldo pendiente de una tarjeta de crédito.', 'egc'); ?>
                     </p>
                 </div>
+
+                <?php // El saldo actual es un dato DERIVADO (saldo inicial +
+                // movimientos, ver Libro::calcular_saldo()): nunca se ofrece
+                // como campo editable, y solo tiene sentido mostrarlo una vez
+                // que la billetera ya existe (antes de guardarla por primera
+                // vez, todavía no hay nada calculado). ?>
+                <?php if ($state['editing']) : ?>
+                    <div class="mb-3">
+                        <span class="form-label d-block"><?php esc_html_e('Saldo actual', 'egc'); ?></span>
+                        <p class="form-control-plaintext">
+                            <?php echo esc_html(number_format_i18n($state['editing']['saldo_actual'], 2)); ?>
+                        </p>
+                    </div>
+                <?php endif; ?>
 
                 <div class="mb-3">
                     <label class="form-label" for="moneda"><?php esc_html_e('Moneda', 'egc'); ?></label>

@@ -6,6 +6,7 @@ use EGC\Core\LoginPage;
 use EGC\Core\Pages;
 use EGC\Core\Singleton;
 use EGC\Core\UserScope;
+use EGC\Modules\Sgf\Libro\Libro;
 use WP_Post;
 use WP_Query;
 
@@ -437,6 +438,13 @@ class BilleteraManagement
         return $post_type_object ? $post_type_object->cap->$meta_cap : $meta_cap;
     }
 
+    /**
+     * 'saldo_inicial': lo que precarga el `<input>` editable del
+     * formulario. 'saldo_actual': el saldo YA calculado (saldo inicial
+     * + movimientos, ver Libro::calcular_saldo()), que la vista
+     * muestra de solo lectura — nunca se ofrece como campo, por el
+     * mismo motivo que documenta Billetera::register_post_meta().
+     */
     private function editable_billetera($post_id)
     {
         $post = get_post($post_id);
@@ -446,10 +454,11 @@ class BilleteraManagement
         }
 
         return [
-            'id'     => $post->ID,
-            'title'  => $post->post_title,
-            'saldo'  => (float) get_post_meta($post->ID, '_saldo', true),
-            'moneda' => (int) get_post_meta($post->ID, '_moneda', true) ?: Billetera::MONEDA_LOCAL,
+            'id'            => $post->ID,
+            'title'         => $post->post_title,
+            'saldo_inicial' => (float) get_post_meta($post->ID, '_saldo_inicial', true),
+            'saldo_actual'  => (float) get_post_meta($post->ID, '_saldo', true),
+            'moneda'        => (int) get_post_meta($post->ID, '_moneda', true) ?: Billetera::MONEDA_LOCAL,
         ];
     }
 
@@ -484,10 +493,10 @@ class BilleteraManagement
         $post_id = isset($_POST['post_id']) ? absint($_POST['post_id']) : 0;
         $title   = isset($_POST['post_title']) ? sanitize_text_field(wp_unslash($_POST['post_title'])) : '';
         // Con signo: una cuenta sobregirada o una tarjeta de crédito son
-        // saldos negativos legítimos (ver la regla de signos del
-        // módulo) — nada de absint ni de forzar unsigned acá.
-        $saldo  = isset($_POST['saldo']) ? (float) str_replace(',', '.', wp_unslash($_POST['saldo'])) : 0.0;
-        $moneda = isset($_POST['moneda']) ? absint($_POST['moneda']) : 0;
+        // saldos iniciales negativos legítimos (ver la regla de signos
+        // del módulo) — nada de absint ni de forzar unsigned acá.
+        $saldo_inicial = isset($_POST['saldo_inicial']) ? (float) str_replace(',', '.', wp_unslash($_POST['saldo_inicial'])) : 0.0;
+        $moneda        = isset($_POST['moneda']) ? absint($_POST['moneda']) : 0;
 
         if ($title === '') {
             $this->back_with_error('empty_title');
@@ -507,8 +516,8 @@ class BilleteraManagement
             'post_title'  => $title,
             'post_status' => $status,
             'meta_input'  => [
-                '_saldo'  => $saldo,
-                '_moneda' => $moneda,
+                '_saldo_inicial' => $saldo_inicial,
+                '_moneda'        => $moneda,
             ],
         ];
 
@@ -526,6 +535,16 @@ class BilleteraManagement
         if (is_wp_error($result)) {
             $this->back_with_error('forbidden');
         }
+
+        // El saldo ACTUAL nunca se escribe directo acá (ver el
+        // docblock de Billetera::register_post_meta()): se deriva
+        // siempre de saldo_inicial + movimientos. Al crear, todavía no
+        // hay movimientos, así que da lo mismo que saldo_inicial; al
+        // editar, si el dueño corrigió el saldo inicial de una
+        // billetera que YA tiene movimientos cargados, hace falta
+        // rehacer la cuenta con ellos, no solo reemplazar un número —
+        // mismo método que usan los hooks de Libro (ver su docblock).
+        Libro::get_instance()->recalcular_saldo_de((int) $result);
 
         $this->back_with_ok();
     }
