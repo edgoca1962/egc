@@ -156,7 +156,7 @@ $back_url      = $manager->back_url();
                     <div class="nav-links">
                         <?php
                         echo paginate_links([
-                            'base'      => add_query_arg('paged', '%#%'),
+                            'base'      => add_query_arg(LibroManagement::QUERY_VAR_PAGED, '%#%'),
                             'format'    => '',
                             'current'   => $resultado['paged'],
                             'total'     => $resultado['paginas'],

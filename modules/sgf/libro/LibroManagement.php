@@ -88,6 +88,22 @@ class LibroManagement
      */
     const MOVIMIENTOS_POR_PAGINA = 100;
 
+    /**
+     * Nombre del query var propio para paginar estas dos consultas
+     * SECUNDARIAS (movimientos_de() y filtros_mantenimiento()) — a
+     * propósito NO se llama 'paged': ese nombre está en la misma lista
+     * nativa de public query vars de WordPress donde vive 'error' (ver
+     * el docblock de LoginPage::ERROR_QUERY_VAR, mismo mecanismo,
+     * mismo diagnóstico). Ninguna de las dos consultas de acá es la
+     * query PRINCIPAL de la página (esa es la de una Página normal,
+     * sin paginar) — pero como 'paged' es un nombre reservado de
+     * todos modos, WP::parse_request() lo consumía de $_GET en cada
+     * petición antes de que este código llegara a leerlo, así que
+     * "Siguiente" nunca avanzaba de página. Con un nombre propio el
+     * conflicto desaparece igual que con ERROR_QUERY_VAR.
+     */
+    const QUERY_VAR_PAGED = 'egc_paged';
+
     private $url_editar = null;
 
     private $url_mantenimiento = null;
@@ -374,7 +390,7 @@ class LibroManagement
      */
     public function movimientos_de($billetera_id)
     {
-        $paged = isset($_GET['paged']) ? max(1, absint($_GET['paged'])) : 1;
+        $paged = isset($_GET[self::QUERY_VAR_PAGED]) ? max(1, absint($_GET[self::QUERY_VAR_PAGED])) : 1;
 
         $query = new WP_Query([
             'post_type'      => Libro::POST_TYPE,
@@ -453,6 +469,8 @@ class LibroManagement
      *   categoria_opciones_filtro: array,
      *   categoria_opciones_destino: array,
      *   movimientos: array,
+     *   monto_neto_pagina: float,
+     *   monto_neto_filtro: float,
      *   error: string,
      *   success: bool,
      *   recategorizados: int,
@@ -478,6 +496,16 @@ class LibroManagement
             : 0;
         $hasta = min($filtros['paged'] * self::MOVIMIENTOS_POR_PAGINA, $resultado['total']);
 
+        // 'Monto Neto Total': suma de la página que se está viendo —
+        // cambia con la paginación (Edwin lo pidió así), así que
+        // alcanza con sumar lo que YA trajo movimientos_filtrados()
+        // para esta página, sin otra consulta. 'Gran Total Neto del
+        // Filtro': el total del filtro completo, sin paginar — no
+        // cambia hasta que cambia el filtro (ver monto_neto_filtrado()
+        // sobre por qué hace falta una consulta aparte para este).
+        $monto_neto_pagina = round(array_sum(array_column($resultado['filas'], 'monto')), 2);
+        $monto_neto_filtro = $this->monto_neto_filtrado($filtros, $user_id);
+
         return [
             'filtros'                    => $filtros,
             'billetera_opciones'         => $this->billetera_opciones_propias($user_id),
@@ -490,6 +518,8 @@ class LibroManagement
             // opciones extra que sí lleva categoria_opciones_filtro().
             'categoria_opciones_destino' => Categoria::get_instance()->arbol_de($user_id),
             'movimientos'                => $resultado['filas'],
+            'monto_neto_pagina'          => $monto_neto_pagina,
+            'monto_neto_filtro'          => $monto_neto_filtro,
             'error'                      => $this->message('error'),
             'success'                    => (bool) $this->message('ok'),
             'recategorizados'            => isset($_GET['ok']) ? absint($_GET['ok']) : 0,
@@ -533,7 +563,7 @@ class LibroManagement
     private function filtros_mantenimiento()
     {
         $filtros          = $this->normalizar_filtros($_GET);
-        $filtros['paged'] = isset($_GET['paged']) ? max(1, absint($_GET['paged'])) : 1;
+        $filtros['paged'] = isset($_GET[self::QUERY_VAR_PAGED]) ? max(1, absint($_GET[self::QUERY_VAR_PAGED])) : 1;
 
         return $filtros;
     }
@@ -852,6 +882,34 @@ class LibroManagement
         $args['fields']         = 'ids';
 
         return get_posts($args);
+    }
+
+    /**
+     * Suma `_monto` de TODOS los movimientos que matchean el filtro
+     * actual, sin paginar — el "Gran Total Neto del Filtro" que pide
+     * Edwin, que a propósito NO cambia con la paginación (solo cuando
+     * cambia el filtro): por eso reutiliza movimiento_ids_filtrados()
+     * (el mismo conjunto completo que ya arma "Aplicar a TODOS"), no
+     * $resultado['filas'] de movimientos_filtrados() (que solo trae la
+     * página actual).
+     *
+     * WP_Query/get_posts no tiene un modo nativo de sumar un meta
+     * numérico (no hay función SUM() en su API, a diferencia de
+     * COUNT(), que found_posts ya resuelve gratis) — sin eso, la única
+     * forma de sumar sin escribir SQL propio (ver PRINCIPIO RECTOR) es
+     * traer los IDs y recorrerlos, mismo patrón que ya usa
+     * Libro::calcular_saldo() para el saldo de una billetera.
+     */
+    private function monto_neto_filtrado($filtros, $user_id)
+    {
+        $ids = $this->movimiento_ids_filtrados($filtros, $user_id);
+
+        $total = 0.0;
+        foreach ($ids as $movimiento_id) {
+            $total += (float) get_post_meta($movimiento_id, '_monto', true);
+        }
+
+        return round($total, 2);
     }
 
     /**

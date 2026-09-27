@@ -206,6 +206,35 @@ $filtros = $state['filtros'];
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
+                    <?php
+                    /**
+                     * Dos totales, a propósito con alcance distinto
+                     * (Edwin lo pidió así): "Monto Neto Total" suma
+                     * solo lo que se está viendo en ESTA página, así
+                     * que cambia al paginar; "Gran Total Neto del
+                     * Filtro" suma TODO lo que matchea el filtro
+                     * completo, así que se mantiene fijo entre páginas
+                     * y solo cambia si se modifica el filtro (ver
+                     * LibroManagement::view_state_mantenimiento() para
+                     * el cálculo de cada uno). `table-group-divider`
+                     * es la clase nativa de Bootstrap para separar un
+                     * `<tfoot>` del cuerpo de la tabla.
+                     */
+                    ?>
+                    <tfoot class="table-group-divider">
+                        <tr class="fw-semibold">
+                            <td colspan="5" class="text-end"><?php esc_html_e('Monto Neto Total', 'egc'); ?></td>
+                            <td class="text-end <?php echo $state['monto_neto_pagina'] < 0 ? 'text-danger' : 'text-success'; ?>">
+                                <?php echo esc_html(number_format_i18n($state['monto_neto_pagina'], 2)); ?>
+                            </td>
+                        </tr>
+                        <tr class="fw-semibold">
+                            <td colspan="5" class="text-end"><?php esc_html_e('Gran Total Neto del Filtro', 'egc'); ?></td>
+                            <td class="text-end <?php echo $state['monto_neto_filtro'] < 0 ? 'text-danger' : 'text-success'; ?>">
+                                <?php echo esc_html(number_format_i18n($state['monto_neto_filtro'], 2)); ?>
+                            </td>
+                        </tr>
+                    </tfoot>
                 </table>
             </div>
 
@@ -301,7 +330,7 @@ $filtros = $state['filtros'];
                 <div class="nav-links">
                     <?php
                     echo paginate_links([
-                        'base'      => add_query_arg('paged', '%#%'),
+                        'base'      => add_query_arg(LibroManagement::QUERY_VAR_PAGED, '%#%'),
                         'format'    => '',
                         'current'   => $paginacion['actual'],
                         'total'     => $paginacion['total_paginas'],
