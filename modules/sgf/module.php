@@ -39,6 +39,7 @@ LibroManagement::get_instance();
 LibroImportacion::get_instance();
 Presupuesto::get_instance();
 PresupuestoManagement::get_instance();
+Tablero::get_instance();
 
 /**
  * Sembrado proactivo de las páginas de alta/edición: igual que Blog, no
@@ -54,3 +55,4 @@ LibroImportacion::get_instance()->url();
 PresupuestoManagement::get_instance()->url_editar();
 PresupuestoManagement::get_instance()->url_listado();
 CategoriaManagement::get_instance()->url();
+Tablero::get_instance()->url();

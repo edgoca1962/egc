@@ -581,9 +581,14 @@ class LibroManagement
      * literalmente necesita la misma normalización — antes de esto
      * hubiera sido generalizar sobre un solo uso, ver SRP APLICADO.
      *
+     * Público porque Tablero.php (el panel de SGF) reusa esta misma
+     * normalización para su propio filtro, idéntico al de esta
+     * pantalla — tercer caso real que la necesita, sin cambiar en nada
+     * su comportamiento.
+     *
      * @return array{billetera_id:int, fecha_desde:string, fecha_hasta:string, monto_desde:string, monto_hasta:string, categoria_filtro:string, texto:string}
      */
-    private function normalizar_filtros($origen)
+    public function normalizar_filtros($origen)
     {
         return [
             'billetera_id' => isset($origen['billetera_id']) ? absint($origen['billetera_id']) : 0,
@@ -610,9 +615,13 @@ class LibroManagement
      * billeteras ajenas en el resto del módulo, pero esta pantalla en
      * particular nunca las ofrece.
      *
+     * Público porque Tablero.php reusa el mismo `<select>` de billetera
+     * propia para su filtro (idéntico al de esta pantalla, mismo
+     * motivo de "siempre las propias billeteras").
+     *
      * @return array<int,string>
      */
-    private function billetera_opciones_propias($user_id)
+    public function billetera_opciones_propias($user_id)
     {
         $billeteras = get_posts([
             'post_type'      => Billetera::POST_TYPE,
@@ -639,8 +648,13 @@ class LibroManagement
      * usuario) no cuele como filtro: en vez de romper o mostrar datos
      * ajenos, movimientos_filtrados() simplemente ignora ese filtro y
      * cae a "todas las propias".
+     *
+     * Público porque Tablero.php también valida contra este método el
+     * billetera_id de su propio filtro, y otra vez para acotar la
+     * sección de saldo por moneda a una billetera puntual — mismo
+     * criterio de propiedad, sin repetirlo.
      */
-    private function billetera_propia($billetera_id, $user_id)
+    public function billetera_propia($billetera_id, $user_id)
     {
         $billetera = get_post($billetera_id);
 
@@ -658,9 +672,13 @@ class LibroManagement
      * movimientos sin ningún término) — con valores que nunca chocan
      * con un term_id real ('' y '0', ver filtros_mantenimiento()).
      *
+     * Público porque Tablero.php reusa el mismo `<select>` para su
+     * propio filtro (idéntico al de esta pantalla, ver el docblock de
+     * Tablero::filtros_panel()).
+     *
      * @return array<int,array{id:int|string,nombre:string,profundidad:int}>
      */
-    private function categoria_opciones_filtro($user_id)
+    public function categoria_opciones_filtro($user_id)
     {
         $opciones = [
             ['id' => '', 'nombre' => __('Cualquiera', 'egc'), 'profundidad' => 0],
@@ -732,11 +750,14 @@ class LibroManagement
      * Deliberadamente sin `posts_per_page`, `paged` ni `no_found_rows`:
      * eso lo decide cada llamador según lo que necesite (paginado y
      * contado, para el listado; todo de una y solo IDs, para el bloque
-     * completo).
+     * completo; todo de una y con los objetos completos, para
+     * Tablero.php, que necesita fecha/monto/categoría de cada
+     * movimiento para armar sus gráficos — tercer llamador real, sin
+     * cambiar en nada cómo se arma el filtro).
      *
      * @return array
      */
-    private function construir_args_filtro($filtros, $user_id)
+    public function construir_args_filtro($filtros, $user_id)
     {
         $args = [
             'post_type'   => Libro::POST_TYPE,

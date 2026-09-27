@@ -460,7 +460,12 @@ class PresupuestoManagement
         return get_current_user_id();
     }
 
-    private function año_seleccionado()
+    /**
+     * Público porque Tablero.php reusa el mismo Año/Mes para el
+     * selector propio (e independiente del filtro principal) de su
+     * sección Comparativo — ver el docblock de Tablero::comparativo().
+     */
+    public function año_seleccionado()
     {
         $actual = (int) gmdate('Y');
         $año    = isset($_GET['anio']) ? absint($_GET['anio']) : $actual;
@@ -477,9 +482,12 @@ class PresupuestoManagement
      * el formulario (ahí el campo Año es un número libre, ver
      * presupuesto-editar.php).
      *
+     * Público por el mismo motivo que año_seleccionado(): lo reusa el
+     * selector propio de Tablero::comparativo().
+     *
      * @return array<int,string>
      */
-    private function año_opciones()
+    public function año_opciones()
     {
         $actual   = (int) gmdate('Y');
         $opciones = [];
@@ -497,8 +505,11 @@ class PresupuestoManagement
      * ("cuánto llevo acumulado a este mes"); para cualquier otro año,
      * el año completo (12), porque ya pasó entero y no hay "mes actual"
      * que tenga sentido ahí.
+     *
+     * Público por el mismo motivo que año_seleccionado(): lo reusa el
+     * selector propio de Tablero::comparativo().
      */
-    private function mes_seleccionado($año)
+    public function mes_seleccionado($año)
     {
         $mes = isset($_GET['mes']) ? absint($_GET['mes']) : 0;
 
@@ -515,9 +526,12 @@ class PresupuestoManagement
      * resuelve esto, get_month() es lo mismo que usa internamente el
      * selector de meses de wp-admin).
      *
+     * Público por el mismo motivo que año_seleccionado(): lo reusa el
+     * selector propio de Tablero::comparativo().
+     *
      * @return array<int,string>
      */
-    private function mes_opciones()
+    public function mes_opciones()
     {
         global $wp_locale;
 
@@ -591,9 +605,15 @@ class PresupuestoManagement
      * porque el presupuesto guardado es siempre el mismo dato mensual
      * — $mes solo afecta cómo se lo multiplica para mostrarlo.
      *
+     * Público porque Tablero::comparativo() reusa este mismo reporte
+     * como el lado "presupuestado" de la comparación contra lo real —
+     * es exactamente el cálculo que ya anticipaba el docblock de
+     * Presupuesto.php ("el futuro Comparativo"), sin cambiar en nada
+     * cómo se arma.
+     *
      * @return array<int,array{etiqueta:string,grupos:array,diferencia:float}>
      */
-    private function monedas_de($usuario_id, $año, $mes)
+    public function monedas_de($usuario_id, $año, $mes)
     {
         $presupuestos = get_posts([
             'post_type'      => Presupuesto::POST_TYPE,

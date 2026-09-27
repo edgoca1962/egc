@@ -569,6 +569,51 @@ class Categoria
     }
 
     /**
+     * El término de CATEGORÍA (profundidad 1) del árbol al que
+     * pertenece $term_id, sea cual sea su profundidad real — mismo
+     * recorrido de padres que tipo_de(), pero deteniéndose un nivel
+     * antes de la raíz en vez de llegar hasta ella. Lo necesita
+     * Tablero.php para agrupar el Pareto por categoría: una
+     * subcategoría (profundidad 2) tiene que contar bajo su categoría
+     * padre, nunca por separado, porque de lo contrario el 20%/80% del
+     * Pareto se calcularía sobre demasiados segmentos sueltos.
+     *
+     * Caso borde: si $term_id ya es un tipo raíz (profundidad 0) —
+     * categorizar un movimiento directamente en "Ingresos" sin bajar de
+     * nivel, algo que el árbol permite aunque en la práctica casi no se
+     * use — no existe una categoría intermedia que devolver, así que
+     * se devuelve el propio tipo: es la agrupación más fina que existe
+     * para ese movimiento puntual.
+     *
+     * @return \WP_Term|null
+     */
+    public function categoria_de($term_id)
+    {
+        $termino = get_term($term_id, self::TAXONOMY);
+        if (!$termino || is_wp_error($termino)) {
+            return null;
+        }
+
+        if ((int) $termino->parent === 0) {
+            return $termino;
+        }
+
+        // Subir un nivel mientras el ABUELO de $termino no sea la raíz:
+        // en el momento en que el PADRE de $termino resulta ser un tipo
+        // raíz, $termino mismo es la categoría (profundidad 1) buscada.
+        while (true) {
+            $padre = get_term($termino->parent, self::TAXONOMY);
+            if (!$padre || is_wp_error($padre)) {
+                return $termino;
+            }
+            if ((int) $padre->parent === 0) {
+                return $termino;
+            }
+            $termino = $padre;
+        }
+    }
+
+    /**
      * Roles que el propio manifest de SGF declaró (nunca
      * 'sgf_editor'/'sgf_autor' a mano) — compartido por
      * sembrar_si_corresponde() y tiene_rol_sgf(), para que ninguno de
