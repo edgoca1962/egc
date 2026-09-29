@@ -37,15 +37,68 @@ if (!defined('ABSPATH')) {
  * lo vuelve a agrandar) — por eso ya no lleva el atributo `height`
  * suelto en el propio `<canvas>`, que solo fija la resolución inicial
  * y no alcanza para contener el resize responsivo.
+ *
+ * $monedas_disponibles_cantidad decide, únicamente en las secciones de
+ * gráficos (saldo, línea mensual, los 4 Pareto), si se centra una
+ * columna sola en vez de mostrar dos — Tablero::monedas_con_billetera()
+ * ya filtró $state['saldo_por_moneda']/['serie_mensual']/['paretos']
+ * a solo las monedas en las que el usuario tiene al menos una
+ * billetera, así que cuando este número da 1 estas tres secciones
+ * traen una sola entrada y esta vista solo decide CÓMO se acomoda esa
+ * entrada (clase `mx-auto` para centrar, `col-12` + el modificador
+ * `.egc-tablero-chart--ancho` para agrandar el gráfico lineal al ancho
+ * completo). El Comparativo queda afuera de esta variable a propósito
+ * (Edwin: "esto aplica únicamente para los gráficos, el presupuesto
+ * queda igual") — su tabla sigue mostrando siempre las dos monedas.
+ *
+ * El waterfall del Requisito B ($state['waterfall_presupuesto'], un
+ * canvas por moneda) se imprime DENTRO del mismo `foreach` que ya
+ * arma la tabla de cada moneda, justo antes de ella — así comparte su
+ * `$moneda_id` sin tener que recorrer el Comparativo dos veces.
+ *
+ * El Comparativo interanual (real acumulado de este año vs. el mismo
+ * acumulado del año anterior) es su propia sección, ANTES de la
+ * tarjeta "Comparativo: real vs. presupuestado" — con su propio
+ * `<form>` (un solo <select>, de mes; el año no se elige, ver el
+ * docblock de Tablero::mes_interanual_seleccionado()) que también
+ * preserva como ocultos los valores del filtro principal y del
+ * selector Año/Mes del otro Comparativo, mismo criterio de arriba.
+ * Sin `$state['interanual_año_actual']` (ningún movimiento que cuente
+ * en todo el historial) esta sección solo imprime su título, ni
+ * siquiera el <select> — no hay ningún mes entre el cual elegir.
+ *
+ * A diferencia del resto del Comparativo, el Comparativo interanual SÍ
+ * queda adentro del Requisito A: `$state['interanual_waterfall']` ya
+ * viene de Tablero::waterfall_interanual() filtrado por
+ * monedas_con_billetera(), así que el `foreach` de más abajo solo
+ * recorre las monedas en las que el usuario tiene billetera — sin
+ * billetera en una moneda, ni su título ni su gráfico aparecen acá
+ * (Edwin lo pidió explícito para esta sección en particular).
  */
 $manager = Tablero::get_instance();
 $state   = $manager->view_state();
 $filtros = $state['filtros'];
 
 $datos_grafico = [
-    'serie_mensual' => $state['serie_mensual'],
-    'paretos'       => $state['paretos'],
+    'serie_mensual'          => $state['serie_mensual'],
+    'paretos'                => $state['paretos'],
+    'waterfall_presupuesto'  => $state['waterfall_presupuesto'],
+    // OJO: la clave de $state es 'interanual_waterfall' (ver
+    // Tablero::view_state()), no 'waterfall_interanual' — ese
+    // desajuste de nombre era el bug real de esta sección: $state['waterfall_interanual']
+    // no existe, así que acá quedaba `null`, tablero.js lo recibía
+    // como `datos.waterfall_interanual === null` y su guard
+    // `if (!datos[datosClave]) { return; }` cortaba en silencio, sin
+    // ningún error en consola — el <canvas> quedaba en el DOM (el
+    // título y el "if" de 'barras' de más abajo SÍ usan la clave
+    // correcta de $state) pero nada intentaba dibujar adentro. La
+    // clave del lado JS ('waterfall_interanual', la que arma este
+    // array) no tiene por qué coincidir con la de $state; lo que
+    // tenía que coincidir era el valor, y no coincidía.
+    'waterfall_interanual'   => $state['interanual_waterfall'],
 ];
+
+$monedas_disponibles_cantidad = count($state['saldo_por_moneda']);
 ?>
 <div class="container py-5">
     <h1 class="h3 mb-4"><?php esc_html_e('Tablero', 'egc'); ?></h1>
@@ -109,11 +162,15 @@ $datos_grafico = [
                 </div>
 
                 <?php
-                // anio/mes ocultos: preservan la selección del Comparativo
-                // (ver el docblock de esta vista) al aplicar este filtro.
+                // anio/mes/mes_interanual ocultos: preservan la
+                // selección de los dos Comparativo (ver el docblock de
+                // esta vista) al aplicar este filtro.
                 ?>
                 <input type="hidden" name="anio" value="<?php echo esc_attr($state['año_comparativo']); ?>">
                 <input type="hidden" name="mes" value="<?php echo esc_attr($state['mes_comparativo']); ?>">
+                <?php if ($state['interanual_mes_seleccionado'] !== null) : ?>
+                    <input type="hidden" name="mes_interanual" value="<?php echo esc_attr($state['interanual_mes_seleccionado']); ?>">
+                <?php endif; ?>
 
                 <div class="col-auto">
                     <button type="submit" class="btn btn-outline-secondary">
@@ -160,7 +217,7 @@ $datos_grafico = [
 
     <div class="row g-4 mb-4">
         <?php foreach ($state['saldo_por_moneda'] as $saldo) : ?>
-            <div class="col-md-6">
+            <div class="col-md-6<?php echo $monedas_disponibles_cantidad === 1 ? ' mx-auto' : ''; ?>">
                 <div class="card h-100 shadow-sm">
                     <div class="card-body">
                         <h2 class="h6 text-muted"><?php echo esc_html($saldo['etiqueta']); ?></h2>
@@ -175,7 +232,7 @@ $datos_grafico = [
 
     <div class="row g-4 mb-4">
         <?php foreach ($state['serie_mensual'] as $moneda_id => $serie) : ?>
-            <div class="col-lg-6">
+            <div class="<?php echo $monedas_disponibles_cantidad === 1 ? 'col-12' : 'col-lg-6'; ?>">
                 <div class="card h-100">
                     <div class="card-body">
                         <h2 class="h6">
@@ -187,7 +244,7 @@ $datos_grafico = [
                             );
                             ?>
                         </h2>
-                        <div class="egc-tablero-chart">
+                        <div class="egc-tablero-chart<?php echo $monedas_disponibles_cantidad === 1 ? ' egc-tablero-chart--ancho' : ''; ?>">
                             <canvas id="egc-tablero-linea-<?php echo esc_attr($moneda_id); ?>"></canvas>
                         </div>
                     </div>
@@ -201,7 +258,7 @@ $datos_grafico = [
             <h2 class="h5"><?php esc_html_e('Pareto de Ingresos', 'egc'); ?></h2>
         </div>
         <?php foreach ($state['paretos']['ingresos'] as $moneda_id => $pareto) : ?>
-            <div class="col-lg-6">
+            <div class="col-lg-6<?php echo $monedas_disponibles_cantidad === 1 ? ' mx-auto' : ''; ?>">
                 <div class="card h-100">
                     <div class="card-body">
                         <h3 class="h6 text-muted"><?php echo esc_html($pareto['etiqueta']); ?></h3>
@@ -223,7 +280,7 @@ $datos_grafico = [
             <h2 class="h5"><?php esc_html_e('Pareto de Egresos y Gastos', 'egc'); ?></h2>
         </div>
         <?php foreach ($state['paretos']['egresos'] as $moneda_id => $pareto) : ?>
-            <div class="col-lg-6">
+            <div class="col-lg-6<?php echo $monedas_disponibles_cantidad === 1 ? ' mx-auto' : ''; ?>">
                 <div class="card h-100">
                     <div class="card-body">
                         <h3 class="h6 text-muted"><?php echo esc_html($pareto['etiqueta']); ?></h3>
@@ -238,6 +295,85 @@ $datos_grafico = [
                 </div>
             </div>
         <?php endforeach; ?>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5 mb-3"><?php esc_html_e('Comparativo interanual — acumulado real', 'egc'); ?></h2>
+
+            <?php if ($state['interanual_año_actual'] === null) : ?>
+                <?php
+                /**
+                 * Edwin fue explícito sobre este caso puntual: sin
+                 * ningún movimiento que cuente en todo el historial
+                 * (Tablero::ultimo_periodo_con_datos() no encontró
+                 * nada), esta sección se queda solo con el título —
+                 * ni <select> (no hay ningún mes entre el que elegir)
+                 * ni gráfico.
+                 */
+                ?>
+                <p class="text-muted mb-0"><?php esc_html_e('Todavía no hay movimientos para comparar.', 'egc'); ?></p>
+            <?php else : ?>
+                <form method="get" class="row g-3 align-items-end mb-3">
+                    <div class="col-sm-5 col-lg-3">
+                        <label class="form-label" for="mes_interanual"><?php esc_html_e('Acumulado hasta', 'egc'); ?></label>
+                        <select class="form-select" id="mes_interanual" name="mes_interanual">
+                            <?php foreach ($state['interanual_mes_opciones'] as $mes_valor => $mes_etiqueta) : ?>
+                                <option value="<?php echo esc_attr($mes_valor); ?>"
+                                    <?php selected($state['interanual_mes_seleccionado'], $mes_valor); ?>>
+                                    <?php echo esc_html($mes_etiqueta); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <?php
+                    // El filtro principal y el selector del otro
+                    // Comparativo viajan ocultos, mismo motivo que el
+                    // resto de esta vista (ver su docblock).
+                    ?>
+                    <input type="hidden" name="billetera_id" value="<?php echo esc_attr($filtros['billetera_id']); ?>">
+                    <input type="hidden" name="fecha_desde" value="<?php echo esc_attr($filtros['fecha_desde']); ?>">
+                    <input type="hidden" name="fecha_hasta" value="<?php echo esc_attr($filtros['fecha_hasta']); ?>">
+                    <input type="hidden" name="monto_desde" value="<?php echo esc_attr($filtros['monto_desde']); ?>">
+                    <input type="hidden" name="monto_hasta" value="<?php echo esc_attr($filtros['monto_hasta']); ?>">
+                    <input type="hidden" name="categoria_filtro" value="<?php echo esc_attr($filtros['categoria_filtro']); ?>">
+                    <input type="hidden" name="texto" value="<?php echo esc_attr($filtros['texto']); ?>">
+                    <input type="hidden" name="anio" value="<?php echo esc_attr($state['año_comparativo']); ?>">
+                    <input type="hidden" name="mes" value="<?php echo esc_attr($state['mes_comparativo']); ?>">
+
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-outline-secondary">
+                            <i class="bi bi-funnel" aria-hidden="true"></i>
+                            <?php esc_html_e('Actualizar', 'egc'); ?>
+                        </button>
+                    </div>
+                </form>
+
+                <p class="text-muted">
+                    <?php
+                    printf(
+                        /* translators: 1: mes hasta el que se acumula, 2: año anterior, 3: año actual */
+                        esc_html__('Acumulado de enero a %1$s: %2$d vs. %3$d.', 'egc'),
+                        esc_html($state['interanual_mes_opciones'][$state['interanual_mes_seleccionado']] ?? ''),
+                        (int) $state['interanual_año_anterior'],
+                        (int) $state['interanual_año_actual']
+                    );
+                    ?>
+                </p>
+
+                <?php foreach ($state['interanual_waterfall'] as $moneda_id => $reporte) : ?>
+                    <h3 class="h6 text-muted"><?php echo esc_html($reporte['etiqueta']); ?></h3>
+                    <?php if (!empty($reporte['barras'])) : ?>
+                        <div class="egc-tablero-chart mb-4">
+                            <canvas id="egc-tablero-waterfall-interanual-<?php echo esc_attr($moneda_id); ?>"></canvas>
+                        </div>
+                    <?php else : ?>
+                        <p class="text-muted mb-4"><?php esc_html_e('Sin movimientos del año anterior para comparar.', 'egc'); ?></p>
+                    <?php endif; ?>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
     </div>
 
     <div class="card mb-4">
@@ -282,6 +418,9 @@ $datos_grafico = [
                 <input type="hidden" name="monto_hasta" value="<?php echo esc_attr($filtros['monto_hasta']); ?>">
                 <input type="hidden" name="categoria_filtro" value="<?php echo esc_attr($filtros['categoria_filtro']); ?>">
                 <input type="hidden" name="texto" value="<?php echo esc_attr($filtros['texto']); ?>">
+                <?php if ($state['interanual_mes_seleccionado'] !== null) : ?>
+                    <input type="hidden" name="mes_interanual" value="<?php echo esc_attr($state['interanual_mes_seleccionado']); ?>">
+                <?php endif; ?>
 
                 <div class="col-auto">
                     <button type="submit" class="btn btn-outline-secondary">
@@ -291,8 +430,68 @@ $datos_grafico = [
                 </div>
             </form>
 
-            <?php foreach ($state['comparativo'] as $fila) : ?>
+            <?php foreach ($state['comparativo'] as $moneda_id => $fila) : ?>
                 <h3 class="h6 text-muted"><?php echo esc_html($fila['etiqueta']); ?></h3>
+
+                <?php
+                /**
+                 * Waterfall (Requisito B) — ANTES de la tabla numérica,
+                 * tal como pidió Edwin: arranca en Real, pasa por la
+                 * variación de cada categoría (Ingresos y Egresos y
+                 * Gastos ya combinados, ver
+                 * Tablero::variacion_por_categoria()) y termina en
+                 * Presupuestado. Un gráfico por moneda, nunca las dos
+                 * montos mezclados entre sí (ver el docblock de
+                 * Tablero::waterfall_presupuesto()) — esta sección no
+                 * se ve afectada por el Requisito A: sigue mostrando
+                 * las dos monedas siempre, aunque el usuario no tenga
+                 * billetera en una de ellas.
+                 *
+                 * Sin presupuesto cargado para esta moneda,
+                 * waterfall_presupuesto() ya devuelve 'barras' vacío
+                 * (Edwin: "cuando el usuario no tenga presupuesto no
+                 * se muestre el gráfico waterfall") — alcanza con
+                 * chequear que 'barras' no esté vacío, sin que la
+                 * vista tenga que mirar tiene_presupuesto por su
+                 * cuenta. A propósito NO se exige más de los dos
+                 * anclajes: Real == Presupuestado sin ninguna
+                 * categoría que varió también es presupuesto real
+                 * cargado, solo que sin diferencia que graficar (ver
+                 * el docblock de Tablero::waterfall_presupuesto()).
+                 */
+                $waterfall = $state['waterfall_presupuesto'][$moneda_id] ?? ['barras' => []];
+                ?>
+                <?php if (!empty($waterfall['barras'])) : ?>
+                    <div class="egc-tablero-chart mb-4">
+                        <canvas id="egc-tablero-waterfall-<?php echo esc_attr($moneda_id); ?>"></canvas>
+                    </div>
+                <?php endif; ?>
+
+                <?php
+                /**
+                 * Tabla numérica — fila por CATEGORÍA (nivel
+                 * "categoría", Requisito 3), agrupadas por tipo con un
+                 * subtotal cada una: $fila['tipos'] ya viene en ese
+                 * orden y ya trae el Real siempre presente, aunque esa
+                 * categoría no tenga presupuesto (ver el docblock de
+                 * Tablero::comparativo()) — esta vista solo pinta,
+                 * ninguna cuenta se hace acá.
+                 *
+                 * Los colores de Real/Presupuestado siguen el tipo de
+                 * la fila (verde en Ingresos, rojo en Egresos y
+                 * Gastos), igual que antes cuando la tabla mostraba
+                 * una sola fila por tipo — ahora esa misma regla se
+                 * aplica a cada categoría y a su subtotal. Los de
+                 * Variación siguen el signo de esa fila puntual, sin
+                 * relación con el tipo — mismo criterio que ya usaba
+                 * la fila del pie, ahora rotulada "Superávit(Déficit)"
+                 * en vez de "Diferencia" (Edwin lo pidió explícito) —
+                 * el monto de esa fila sale de
+                 * Tablero::comparativo_real(), que lo suma (Ingresos +
+                 * Egresos y Gastos, nunca resta: Egresos y Gastos ya
+                 * es negativo) para netear bien los dos lados.
+                 */
+                ?>
                 <div class="table-responsive mb-4">
                     <table class="table table-sm align-middle">
                         <thead>
@@ -304,33 +503,49 @@ $datos_grafico = [
                                 <th scope="col" class="text-end"><?php esc_html_e('Variación relativa', 'egc'); ?></th>
                             </tr>
                         </thead>
-                        <tbody>
-                            <tr>
-                                <td><?php esc_html_e('Ingresos', 'egc'); ?></td>
-                                <td class="text-end text-success"><?php echo esc_html(number_format_i18n($fila['ingresos_real'], 2)); ?></td>
-                                <td class="text-end text-success"><?php echo esc_html(number_format_i18n($fila['ingresos_presupuestado'], 2)); ?></td>
-                                <td class="text-end <?php echo $fila['ingresos_variacion_absoluta'] < 0 ? 'text-danger' : 'text-success'; ?>">
-                                    <?php echo esc_html(number_format_i18n($fila['ingresos_variacion_absoluta'], 2)); ?>
-                                </td>
-                                <td class="text-end <?php echo $fila['ingresos_variacion_relativa'] < 0 ? 'text-danger' : 'text-success'; ?>">
-                                    <?php echo esc_html(number_format_i18n($fila['ingresos_variacion_relativa'], 2)); ?>%
-                                </td>
-                            </tr>
-                            <tr>
-                                <td><?php esc_html_e('Egresos y Gastos', 'egc'); ?></td>
-                                <td class="text-end text-danger"><?php echo esc_html(number_format_i18n($fila['egresos_real'], 2)); ?></td>
-                                <td class="text-end text-danger"><?php echo esc_html(number_format_i18n($fila['egresos_presupuestado'], 2)); ?></td>
-                                <td class="text-end <?php echo $fila['egresos_variacion_absoluta'] < 0 ? 'text-danger' : 'text-success'; ?>">
-                                    <?php echo esc_html(number_format_i18n($fila['egresos_variacion_absoluta'], 2)); ?>
-                                </td>
-                                <td class="text-end <?php echo $fila['egresos_variacion_relativa'] < 0 ? 'text-danger' : 'text-success'; ?>">
-                                    <?php echo esc_html(number_format_i18n($fila['egresos_variacion_relativa'], 2)); ?>%
-                                </td>
-                            </tr>
-                        </tbody>
+                        <?php foreach ($fila['tipos'] as $tipo_fila) : ?>
+                            <?php $color_tipo = $tipo_fila['nombre'] === 'Ingresos' ? 'text-success' : 'text-danger'; ?>
+                            <tbody>
+                                <tr class="table-light">
+                                    <th scope="rowgroup" colspan="5"><?php echo esc_html($tipo_fila['nombre']); ?></th>
+                                </tr>
+                                <?php foreach ($tipo_fila['categorias'] as $categoria_fila) : ?>
+                                    <tr>
+                                        <td class="ps-4"><?php echo esc_html($categoria_fila['nombre']); ?></td>
+                                        <td class="text-end <?php echo esc_attr($color_tipo); ?>"><?php echo esc_html(number_format_i18n($categoria_fila['real'], 2)); ?></td>
+                                        <td class="text-end <?php echo esc_attr($color_tipo); ?>"><?php echo esc_html(number_format_i18n($categoria_fila['presupuestado'], 2)); ?></td>
+                                        <td class="text-end <?php echo $categoria_fila['variacion_absoluta'] < 0 ? 'text-danger' : 'text-success'; ?>">
+                                            <?php echo esc_html(number_format_i18n($categoria_fila['variacion_absoluta'], 2)); ?>
+                                        </td>
+                                        <td class="text-end <?php echo $categoria_fila['variacion_relativa'] < 0 ? 'text-danger' : 'text-success'; ?>">
+                                            <?php echo esc_html(number_format_i18n($categoria_fila['variacion_relativa'], 2)); ?>%
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                <tr class="fw-semibold table-group-divider">
+                                    <td>
+                                        <?php
+                                        printf(
+                                            /* translators: %s: nombre del tipo (Ingresos o Egresos y Gastos) */
+                                            esc_html__('Subtotal %s', 'egc'),
+                                            esc_html($tipo_fila['nombre'])
+                                        );
+                                        ?>
+                                    </td>
+                                    <td class="text-end <?php echo esc_attr($color_tipo); ?>"><?php echo esc_html(number_format_i18n($tipo_fila['subtotal_real'], 2)); ?></td>
+                                    <td class="text-end <?php echo esc_attr($color_tipo); ?>"><?php echo esc_html(number_format_i18n($tipo_fila['subtotal_presupuestado'], 2)); ?></td>
+                                    <td class="text-end <?php echo $tipo_fila['subtotal_variacion_absoluta'] < 0 ? 'text-danger' : 'text-success'; ?>">
+                                        <?php echo esc_html(number_format_i18n($tipo_fila['subtotal_variacion_absoluta'], 2)); ?>
+                                    </td>
+                                    <td class="text-end <?php echo $tipo_fila['subtotal_variacion_relativa'] < 0 ? 'text-danger' : 'text-success'; ?>">
+                                        <?php echo esc_html(number_format_i18n($tipo_fila['subtotal_variacion_relativa'], 2)); ?>%
+                                    </td>
+                                </tr>
+                            </tbody>
+                        <?php endforeach; ?>
                         <tfoot class="table-group-divider">
                             <tr class="fw-semibold">
-                                <td><?php esc_html_e('Diferencia', 'egc'); ?></td>
+                                <td><?php esc_html_e('Superávit(Déficit)', 'egc'); ?></td>
                                 <td class="text-end <?php echo $fila['diferencia_real'] < 0 ? 'text-danger' : 'text-success'; ?>">
                                     <?php echo esc_html(number_format_i18n($fila['diferencia_real'], 2)); ?>
                                 </td>

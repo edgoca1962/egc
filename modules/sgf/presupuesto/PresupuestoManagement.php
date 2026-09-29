@@ -666,6 +666,16 @@ class PresupuestoManagement
             $monedas[$moneda]['grupos'][$tipo->term_id]['filas'][]   = [
                 'id'        => $presupuesto->ID,
                 'categoria' => $terminos[0]->name,
+                // term_id del término asignado (no necesariamente a
+                // nivel "categoría" — puede ser una subcategoría, ver
+                // Categoria::categoria_de()): esta fila no lo resuelve
+                // ella misma, solo lo expone. Se agregó para que
+                // Tablero::variacion_por_categoria() pueda agrupar el
+                // waterfall del Comparativo por categoría con el mismo
+                // criterio que ya usa el resto del Tablero (subir la
+                // subcategoría a su categoría padre) — segundo
+                // consumidor real de este dato, ver su docblock.
+                'term_id'   => $terminos[0]->term_id,
                 'monto'     => $monto_acumulado,
             ];
         }

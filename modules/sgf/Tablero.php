@@ -133,7 +133,13 @@ class Tablero
      *   año_opciones: array<int,string>,
      *   mes_comparativo: int,
      *   mes_opciones: array<int,string>,
+     *   waterfall_presupuesto: array<int,array>,
      *   comparativo: array<int,array>,
+     *   interanual_año_actual: ?int,
+     *   interanual_año_anterior: ?int,
+     *   interanual_mes_opciones: array<int,string>,
+     *   interanual_mes_seleccionado: ?int,
+     *   interanual_waterfall: array<int,array>,
      * }
      */
     public function view_state()
@@ -145,16 +151,28 @@ class Tablero
         $clasificados = $this->clasificar($movimientos);
         $meses        = $this->meses_del_rango($filtros['fecha_desde'], $filtros['fecha_hasta']);
 
+        $monedas_disponibles = $this->monedas_con_billetera($user_id);
+
         $año_comparativo = PresupuestoManagement::get_instance()->año_seleccionado();
         $mes_comparativo = PresupuestoManagement::get_instance()->mes_seleccionado($año_comparativo);
+
+        // Requisito "Comparativo interanual": ver ultimo_periodo_con_datos()
+        // sobre por qué esto se ancla al último movimiento real, nunca al
+        // año/mes de calendario.
+        $periodo_interanual = $this->ultimo_periodo_con_datos($user_id);
+
+        $año_actual_interanual   = $periodo_interanual['año'] ?? null;
+        $año_anterior_interanual = $año_actual_interanual !== null ? $año_actual_interanual - 1 : null;
+        $mes_max_interanual      = $periodo_interanual['mes'] ?? null;
+        $mes_interanual          = $mes_max_interanual !== null ? $this->mes_interanual_seleccionado($mes_max_interanual) : null;
 
         return [
             'filtros'                   => $filtros,
             'billetera_opciones'        => LibroManagement::get_instance()->billetera_opciones_propias($user_id),
             'categoria_opciones_filtro' => LibroManagement::get_instance()->categoria_opciones_filtro($user_id),
-            'saldo_por_moneda'          => $this->saldo_por_moneda($user_id, $filtros['billetera_id']),
-            'serie_mensual'             => $this->serie_mensual($clasificados['serie'], $meses),
-            'paretos'                   => $this->paretos($clasificados['pareto']),
+            'saldo_por_moneda'          => $this->saldo_por_moneda($user_id, $filtros['billetera_id'], $monedas_disponibles),
+            'serie_mensual'             => $this->serie_mensual($clasificados['serie'], $meses, $monedas_disponibles),
+            'paretos'                   => $this->paretos($clasificados['pareto'], $monedas_disponibles),
             'sin_categorizar'           => [
                 'cantidad'   => $clasificados['sin_categorizar']['cantidad'],
                 'monto_neto' => round($clasificados['sin_categorizar']['monto_neto'], 2),
@@ -163,8 +181,184 @@ class Tablero
             'año_opciones'    => PresupuestoManagement::get_instance()->año_opciones(),
             'mes_comparativo' => $mes_comparativo,
             'mes_opciones'    => PresupuestoManagement::get_instance()->mes_opciones(),
+            'waterfall_presupuesto' => $this->waterfall_presupuesto($user_id, $año_comparativo, $mes_comparativo),
             'comparativo'     => $this->comparativo($user_id, $año_comparativo, $mes_comparativo),
+
+            'interanual_año_actual'       => $año_actual_interanual,
+            'interanual_año_anterior'     => $año_anterior_interanual,
+            'interanual_mes_opciones'     => $mes_max_interanual !== null ? $this->mes_opciones_interanual($mes_max_interanual) : [],
+            'interanual_mes_seleccionado' => $mes_interanual,
+            'interanual_waterfall'        => $mes_interanual !== null
+                ? $this->waterfall_interanual($user_id, $año_actual_interanual, $año_anterior_interanual, $mes_interanual, $monedas_disponibles)
+                : [],
         ];
+    }
+
+    /**
+     * Monedas (subconjunto de [Billetera::MONEDA_LOCAL,
+     * Billetera::MONEDA_EXTRANJERA]) para las que $user_id tiene AL
+     * MENOS UNA billetera propia — chequeo puramente estructural, que
+     * a propósito ignora el filtro de billetera_id del panel (ese
+     * filtro solo acota qué movimientos se cuentan; esto decide si la
+     * columna entera de una moneda debe existir en la pantalla).
+     *
+     * Edwin fue explícito: cuando no tiene ninguna billetera en una
+     * moneda, esa columna se oculta del todo en las secciones de
+     * gráficos (saldo, línea mensual, los 4 Pareto) en vez de
+     * mostrarse vacía en cero — ver saldo_por_moneda(), serie_mensual()
+     * y paretos(), las tres reciben este resultado. El Comparativo
+     * queda deliberadamente afuera de esta regla (Edwin: "esto aplica
+     * únicamente para los gráficos, el presupuesto queda igual") y
+     * sigue iterando las dos monedas siempre — ver comparativo(), que
+     * no llama a este método.
+     *
+     * El ORDEN del resultado es fijo — Moneda Extranjera primero,
+     * Moneda Local después — nunca el orden en que get_posts() haya
+     * devuelto las billeteras (eso, además de no tener ningún criterio
+     * declarado, es lo que hacía que la columna de moneda extranjera
+     * apareciera a veces a la derecha y a veces a la izquierda): Edwin
+     * pidió explícito que, cuando hay las dos, la extranjera se vea
+     * siempre a la izquierda. Por eso este método arma primero el
+     * CONJUNTO de monedas presentes ($presentes, sin importar el
+     * orden de la consulta) y recién después lo recorre en el orden
+     * fijo que define el resultado.
+     *
+     * @return array<int,int>
+     */
+    private function monedas_con_billetera($user_id)
+    {
+        $billeteras_ids = get_posts([
+            'post_type'      => Billetera::POST_TYPE,
+            'author'         => $user_id,
+            'post_status'    => ['publish', 'pending'],
+            'posts_per_page' => -1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+        ]);
+
+        $presentes = [];
+        foreach ($billeteras_ids as $billetera_id) {
+            $moneda = (int) get_post_meta($billetera_id, '_moneda', true);
+            if (!in_array($moneda, [Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA], true)) {
+                continue;
+            }
+            $presentes[$moneda] = true;
+        }
+
+        $monedas = [];
+        foreach ([Billetera::MONEDA_EXTRANJERA, Billetera::MONEDA_LOCAL] as $moneda_id) {
+            if (isset($presentes[$moneda_id])) {
+                $monedas[] = $moneda_id;
+            }
+        }
+
+        return $monedas;
+    }
+
+    /**
+     * Año y mes del movimiento MÁS RECIENTE que cuenta para un
+     * acumulado real (mismo criterio de inclusión que
+     * comparativo_real(): tiene que resolver a Ingresos o Egresos y
+     * Gastos, nunca Transferencias ni sin categorización) — de TODAS
+     * las billeteras propias de $user_id, sin importar el filtro del
+     * panel ni el rango de fecha (misma independencia que el resto
+     * del Comparativo).
+     *
+     * Esto es lo que ancla la sección "Comparativo interanual" (real
+     * acumulado de este año vs. el mismo acumulado del año anterior):
+     * Edwin fue explícito en que el "año/mes actual" de esa
+     * comparación es el más reciente CON INFORMACIÓN, nunca el
+     * año/mes de CALENDARIO (gmdate('Y')/gmdate('n')) — si todavía no
+     * cargó ningún movimiento del mes en curso, no tiene sentido
+     * ofrecerle comparar contra un acumulado vacío. Es, a propósito,
+     * un criterio distinto al que ya usa
+     * PresupuestoManagement::mes_seleccionado() (que si el año es el
+     * actual, asume el mes de calendario): ese default es para el
+     * Presupuesto, que se CARGA hacia adelante; este es para el REAL,
+     * que se CARGA hacia atrás, a medida que ocurre.
+     *
+     * Se detiene en el primer movimiento que matchea, recorriendo
+     * `orderby => date, order => DESC` — no hace falta traer más que
+     * el ID y la fecha de cada uno (`fields => 'ids'`, get_the_date()
+     * y get_the_terms() aceptan un ID tal cual un objeto \WP_Post).
+     *
+     * @return array{año:int, mes:int}|null null si $user_id no tiene
+     *                                      ningún movimiento que cuente.
+     */
+    private function ultimo_periodo_con_datos($user_id)
+    {
+        $movimientos_ids = get_posts([
+            'post_type'      => Libro::POST_TYPE,
+            'post_status'    => 'publish',
+            'author'         => $user_id,
+            'posts_per_page' => -1,
+            'no_found_rows'  => true,
+            'orderby'        => 'date',
+            'order'          => 'DESC',
+            'fields'         => 'ids',
+        ]);
+
+        $categoria = Categoria::get_instance();
+
+        foreach ($movimientos_ids as $movimiento_id) {
+            $terminos = get_the_terms($movimiento_id, Categoria::TAXONOMY);
+            $term_id  = (!empty($terminos) && !is_wp_error($terminos)) ? (int) $terminos[0]->term_id : 0;
+
+            if (!$term_id) {
+                continue;
+            }
+
+            $tipo = $categoria->tipo_de($term_id);
+            if (!$tipo || !in_array($tipo->name, ['Ingresos', 'Egresos y Gastos'], true)) {
+                continue;
+            }
+
+            return [
+                'año' => (int) get_the_date('Y', $movimiento_id),
+                'mes' => (int) get_the_date('n', $movimiento_id),
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * Mes elegido por la persona para el Comparativo interanual — GET
+     * propio (`mes_interanual`), separado del `mes` que ya usa el
+     * selector Año/Mes del Comparativo real-vs-presupuesto (son dos
+     * secciones independientes, con sus propios controles, mismo
+     * criterio que ya separa los distintos `<form>` de esta vista).
+     * Nunca puede superar $mes_max (el mes de ultimo_periodo_con_datos()):
+     * no tiene sentido comparar contra un acumulado de un mes que el
+     * año actual todavía no alcanzó. Sin selección en la URL, o una
+     * fuera de rango, el default es el propio $mes_max — "el año/mes
+     * actual más reciente", tal como pidió Edwin.
+     */
+    private function mes_interanual_seleccionado($mes_max)
+    {
+        $mes = isset($_GET['mes_interanual']) ? absint($_GET['mes_interanual']) : 0;
+
+        if ($mes >= 1 && $mes <= $mes_max) {
+            return $mes;
+        }
+
+        return $mes_max;
+    }
+
+    /**
+     * Nombres de mes (reusa PresupuestoManagement::mes_opciones(), ya
+     * traducidos vía WP_Locale — PRINCIPIO RECTOR) recortados a los
+     * primeros $mes_max — Edwin fue explícito: el <select> "mostrará
+     * hasta el mes más reciente con información", nunca los 12 meses
+     * completos. array_slice() con $preserve_keys = true porque el
+     * value de cada <option> tiene que seguir siendo el número de mes
+     * (1..$mes_max), no la posición dentro del array recortado.
+     *
+     * @return array<int,string>
+     */
+    private function mes_opciones_interanual($mes_max)
+    {
+        return array_slice(PresupuestoManagement::get_instance()->mes_opciones(), 0, $mes_max, true);
     }
 
     /**
@@ -352,13 +546,18 @@ class Tablero
      * importa para el color (verde/rojo), no para la altura de la
      * línea.
      *
+     * Solo arma entrada para las monedas de $monedas_disponibles (ver
+     * monedas_con_billetera()) — si el usuario no tiene ninguna
+     * billetera en moneda extranjera, este array ni siquiera trae esa
+     * clave, y la vista no dibuja esa columna.
+     *
      * @return array<int,array{etiqueta:string, meses:array<int,string>, ingresos:array<int,float>, egresos:array<int,float>}>
      */
-    private function serie_mensual($serie, $meses)
+    private function serie_mensual($serie, $meses, $monedas_disponibles)
     {
         $resultado = [];
 
-        foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
+        foreach ($monedas_disponibles as $moneda_id) {
             $ingresos = [];
             $egresos  = [];
 
@@ -383,9 +582,12 @@ class Tablero
      * Local/Extranjera) a partir de lo que ya acumuló clasificar() —
      * ver armar_pareto() para el recorte al ~80%.
      *
+     * Solo arma columna para las monedas de $monedas_disponibles (ver
+     * monedas_con_billetera()) — mismo criterio que serie_mensual().
+     *
      * @return array{ingresos:array<int,array>, egresos:array<int,array>}
      */
-    private function paretos($pareto_bruto)
+    private function paretos($pareto_bruto, $monedas_disponibles)
     {
         $tipos = [
             'ingresos' => 'Ingresos',
@@ -395,7 +597,9 @@ class Tablero
         $resultado = [];
 
         foreach ($tipos as $clave => $tipo_nombre) {
-            foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
+            $resultado[$clave] = [];
+
+            foreach ($monedas_disponibles as $moneda_id) {
                 $resultado[$clave][$moneda_id] = [
                     'etiqueta'  => BilleteraManagement::get_instance()->moneda_label($moneda_id),
                     'segmentos' => $this->armar_pareto($pareto_bruto[$tipo_nombre][$moneda_id] ?? []),
@@ -479,9 +683,16 @@ class Tablero
      * se eligió una billetera puntual — misma validación de propiedad
      * que el resto del filtro (billetera_propia()).
      *
+     * Solo devuelve entrada para las monedas de $monedas_disponibles
+     * (ver monedas_con_billetera()) — mismo criterio que
+     * serie_mensual() y paretos(). El total en sí se sigue calculando
+     * igual que antes (recorre TODAS las billeteras propias que
+     * matcheen $billetera_id_filtro); lo único que cambia es qué
+     * monedas llegan al resultado final.
+     *
      * @return array<int,array{etiqueta:string, total:float}>
      */
-    private function saldo_por_moneda($user_id, $billetera_id_filtro)
+    private function saldo_por_moneda($user_id, $billetera_id_filtro, $monedas_disponibles)
     {
         $args = [
             'post_type'      => Billetera::POST_TYPE,
@@ -512,6 +723,10 @@ class Tablero
 
         $resultado = [];
         foreach ($totales as $moneda_id => $total) {
+            if (!in_array($moneda_id, $monedas_disponibles, true)) {
+                continue;
+            }
+
             $resultado[$moneda_id] = [
                 'etiqueta' => BilleteraManagement::get_instance()->moneda_label($moneda_id),
                 'total'    => round($total, 2),
@@ -534,17 +749,55 @@ class Tablero
      * rango de fecha se haya elegido arriba, con su propio selector de
      * Año/Mes independiente (ver comparativo_real()).
      *
-     * Cada fila (Ingresos, Egresos y Gastos, Diferencia) lleva además
-     * su variación absoluta (real − presupuestado) y relativa (esa
-     * diferencia sobre el presupuestado, en %) — ver variacion() para
-     * el caso especial de "sin presupuesto cargado".
+     * Fila por CATEGORÍA (nivel "categoría", ver
+     * Categoria::categoria_de()), agrupadas por tipo — Edwin pidió
+     * explícito bajar un nivel la granularidad de esta tabla, que
+     * antes solo comparaba a nivel de tipo (Ingresos/Egresos y
+     * Gastos). Cada tipo trae sus categorías más un subtotal
+     * (subtotal_real/subtotal_presupuestado, con su propia variación),
+     * y al final una única fila "Superávit(Déficit)" a nivel de TODA
+     * la moneda (`diferencia_*` en el array, el nombre del campo no
+     * cambió aunque la vista ya no la rotule "Diferencia") — mismo
+     * esqueleto de tres niveles (categoría → subtotal de tipo →
+     * superávit/déficit general) que ya usa
+     * PresupuestoManagement::monedas_de() para su propio listado.
+     *
+     * `diferencia_real` sale de comparativo_real(), que la calcula
+     * como SUMA de Ingresos + Egresos y Gastos (nunca resta): el
+     * subtotal de Egresos y Gastos ya es negativo (`$monto` con
+     * signo, ver Libro.php), así que sumarlo es lo que neta
+     * correctamente — restarlo lo hubiera sumado dos veces (bug real
+     * que encontró Edwin). `diferencia_presupuestado` sí sigue
+     * restando (PresupuestoManagement::monedas_de(), donde las dos
+     * magnitudes son siempre positivas): cada lado usa la resta o la
+     * suma que corresponde a SU propia convención de signo, no una
+     * regla única para los dos.
+     *
+     * El REAL de una categoría se muestra siempre, tenga o no
+     * presupuesto cargado (Edwin fue explícito: "debe mostrar la
+     * información del real acumulado... aunque no haya presupuesto")
+     * — una categoría entra a esta tabla si tiene movimientos reales O
+     * presupuesto en el período, lo que haya, nunca solo cuando tiene
+     * las dos cosas. El caso "sin presupuesto" solo afecta a la
+     * columna Variación de esa fila puntual (ver variacion()), nunca
+     * a si la fila se muestra.
+     *
+     * Categoría y subtotal de tipo comparten la misma convención de
+     * signo que ya traían ingresos_real/egresos_real antes de este
+     * cambio (real: `$monto` crudo de comparativo_real(), positivo
+     * para Ingresos y negativo para Egresos y Gastos; presupuestado:
+     * siempre positivo, porque PresupuestoManagement::monedas_de()
+     * nunca guarda un monto <= 0) — no se tocó ese criterio, solo se
+     * bajó de nivel.
      *
      * @return array<int,array{
      *   etiqueta:string,
-     *   ingresos_real:float, ingresos_presupuestado:float,
-     *   ingresos_variacion_absoluta:float, ingresos_variacion_relativa:float,
-     *   egresos_real:float, egresos_presupuestado:float,
-     *   egresos_variacion_absoluta:float, egresos_variacion_relativa:float,
+     *   tipos:array<int,array{
+     *     nombre:string,
+     *     categorias:array<int,array{nombre:string, real:float, presupuestado:float, variacion_absoluta:float, variacion_relativa:float}>,
+     *     subtotal_real:float, subtotal_presupuestado:float,
+     *     subtotal_variacion_absoluta:float, subtotal_variacion_relativa:float,
+     *   }>,
      *   diferencia_real:float, diferencia_presupuestado:float,
      *   diferencia_variacion_absoluta:float, diferencia_variacion_relativa:float,
      * }>
@@ -553,62 +806,108 @@ class Tablero
     {
         $real          = $this->comparativo_real($user_id, $año, $mes);
         $presupuestado = PresupuestoManagement::get_instance()->monedas_de($user_id, $año, $mes);
+        $categoria     = Categoria::get_instance();
 
         $resultado = [];
 
         foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
-            $reporte_real   = $real[$moneda_id] ?? ['grupos' => [], 'diferencia' => 0.0];
+            $reporte_real   = $real[$moneda_id] ?? ['categorias' => [], 'diferencia' => 0.0];
             $reporte_presup = $presupuestado[$moneda_id] ?? ['grupos' => [], 'diferencia' => 0.0];
 
-            $ingresos_real   = round($this->subtotal_de($reporte_real, 'Ingresos'), 2);
-            $ingresos_presup = round($this->subtotal_de($reporte_presup, 'Ingresos'), 2);
-            $egresos_real    = round($this->subtotal_de($reporte_real, 'Egresos y Gastos'), 2);
-            $egresos_presup  = round($this->subtotal_de($reporte_presup, 'Egresos y Gastos'), 2);
-            $diferencia_real   = round($reporte_real['diferencia'] ?? 0.0, 2);
-            $diferencia_presup = round($reporte_presup['diferencia'] ?? 0.0, 2);
+            // categoria_id => {nombre, real, presupuestado} — arranca
+            // con lo real de cada categoría (siempre presente, aunque
+            // no tenga presupuesto) y le suma encima lo presupuestado
+            // que corresponda, si lo hay.
+            $categorias = [];
+            foreach ($reporte_real['categorias'] as $categoria_id => $fila) {
+                $categorias[$categoria_id] = [
+                    'nombre'        => $fila['nombre'],
+                    'real'          => $fila['total'],
+                    'presupuestado' => 0.0,
+                ];
+            }
 
-            $variacion_ingresos   = $this->variacion($ingresos_real, $ingresos_presup);
-            $variacion_egresos    = $this->variacion($egresos_real, $egresos_presup);
-            $variacion_diferencia = $this->variacion($diferencia_real, $diferencia_presup);
+            foreach ($reporte_presup['grupos'] as $grupo) {
+                if (!in_array($grupo['nombre'], ['Ingresos', 'Egresos y Gastos'], true)) {
+                    continue;
+                }
+
+                foreach ($grupo['filas'] as $fila) {
+                    $categoria_term   = $categoria->categoria_de($fila['term_id']);
+                    $categoria_id     = $categoria_term ? $categoria_term->term_id : $fila['term_id'];
+                    $categoria_nombre = $categoria_term ? $categoria_term->name : $fila['categoria'];
+
+                    if (!isset($categorias[$categoria_id])) {
+                        $categorias[$categoria_id] = ['nombre' => $categoria_nombre, 'real' => 0.0, 'presupuestado' => 0.0];
+                    }
+
+                    $categorias[$categoria_id]['presupuestado'] += $fila['monto'];
+                }
+            }
+
+            // Reparte cada categoría bajo su tipo (Ingresos/Egresos y
+            // Gastos) — tipo_de() la resuelve sin importar si esa
+            // categoría solo tiene real, solo presupuesto, o las dos
+            // cosas.
+            $tipos = [];
+            foreach ($categorias as $categoria_id => $fila) {
+                $tipo = $categoria->tipo_de($categoria_id);
+                if (!$tipo || !in_array($tipo->name, ['Ingresos', 'Egresos y Gastos'], true)) {
+                    continue;
+                }
+
+                if (!isset($tipos[$tipo->term_id])) {
+                    $tipos[$tipo->term_id] = ['nombre' => $tipo->name, 'categorias' => []];
+                }
+
+                $real_cat          = round($fila['real'], 2);
+                $presupuestado_cat = round($fila['presupuestado'], 2);
+                $variacion_cat     = $this->variacion($real_cat, $presupuestado_cat);
+
+                $tipos[$tipo->term_id]['categorias'][] = [
+                    'nombre'             => $fila['nombre'],
+                    'real'               => $real_cat,
+                    'presupuestado'      => $presupuestado_cat,
+                    'variacion_absoluta' => $variacion_cat['absoluta'],
+                    'variacion_relativa' => $variacion_cat['relativa'],
+                ];
+            }
+
+            uasort($tipos, function ($a, $b) use ($categoria) {
+                return $categoria->prioridad_tipo($a['nombre']) <=> $categoria->prioridad_tipo($b['nombre']);
+            });
+
+            foreach ($tipos as &$tipo_fila) {
+                // Alfabético dentro de cada tipo — mismo criterio que
+                // ya usa monedas_de() para sus propias filas.
+                $tipo_fila['categorias'] = wp_list_sort($tipo_fila['categorias'], 'nombre', 'ASC');
+
+                $subtotal_real          = round(array_sum(array_column($tipo_fila['categorias'], 'real')), 2);
+                $subtotal_presupuestado = round(array_sum(array_column($tipo_fila['categorias'], 'presupuestado')), 2);
+                $subtotal_variacion     = $this->variacion($subtotal_real, $subtotal_presupuestado);
+
+                $tipo_fila['subtotal_real']              = $subtotal_real;
+                $tipo_fila['subtotal_presupuestado']      = $subtotal_presupuestado;
+                $tipo_fila['subtotal_variacion_absoluta'] = $subtotal_variacion['absoluta'];
+                $tipo_fila['subtotal_variacion_relativa'] = $subtotal_variacion['relativa'];
+            }
+            unset($tipo_fila);
+
+            $diferencia_real          = round($reporte_real['diferencia'] ?? 0.0, 2);
+            $diferencia_presupuestado = round($reporte_presup['diferencia'] ?? 0.0, 2);
+            $diferencia_variacion     = $this->variacion($diferencia_real, $diferencia_presupuestado);
 
             $resultado[$moneda_id] = [
-                'etiqueta'                     => BilleteraManagement::get_instance()->moneda_label($moneda_id),
-                'ingresos_real'                => $ingresos_real,
-                'ingresos_presupuestado'       => $ingresos_presup,
-                'ingresos_variacion_absoluta'  => $variacion_ingresos['absoluta'],
-                'ingresos_variacion_relativa'  => $variacion_ingresos['relativa'],
-                'egresos_real'                 => $egresos_real,
-                'egresos_presupuestado'        => $egresos_presup,
-                'egresos_variacion_absoluta'   => $variacion_egresos['absoluta'],
-                'egresos_variacion_relativa'   => $variacion_egresos['relativa'],
-                'diferencia_real'              => $diferencia_real,
-                'diferencia_presupuestado'     => $diferencia_presup,
-                'diferencia_variacion_absoluta' => $variacion_diferencia['absoluta'],
-                'diferencia_variacion_relativa' => $variacion_diferencia['relativa'],
+                'etiqueta'                      => BilleteraManagement::get_instance()->moneda_label($moneda_id),
+                'tipos'                         => array_values($tipos),
+                'diferencia_real'               => $diferencia_real,
+                'diferencia_presupuestado'      => $diferencia_presupuestado,
+                'diferencia_variacion_absoluta' => $diferencia_variacion['absoluta'],
+                'diferencia_variacion_relativa' => $diferencia_variacion['relativa'],
             ];
         }
 
         return $resultado;
-    }
-
-    /**
-     * Subtotal de $tipo_nombre ('Ingresos' o 'Egresos y Gastos') dentro
-     * de un reporte por moneda ya armado (real o presupuestado, misma
-     * forma en los dos) — 0.0 si ese tipo no tiene ninguna fila. Por
-     * NOMBRE y no por term_id: aunque en la práctica el term_id de
-     * "Ingresos" es el mismo en los dos lados (ambos derivan del árbol
-     * de ESTE mismo usuario), comparar por nombre no depende de que
-     * los dos reportes hayan quedado indexados igual.
-     */
-    private function subtotal_de($reporte_moneda, $tipo_nombre)
-    {
-        foreach ($reporte_moneda['grupos'] as $grupo) {
-            if ($grupo['nombre'] === $tipo_nombre) {
-                return $grupo['subtotal'];
-            }
-        }
-
-        return 0.0;
     }
 
     /**
@@ -655,12 +954,16 @@ class Tablero
      * panel (ver clasificar()): no se puede saber si son ingreso o
      * egreso real.
      *
-     * Sin 'filas' por categoría (a diferencia de monedas_de()): el
-     * Comparativo solo necesita el subtotal por tipo para confrontarlo
-     * contra lo presupuestado, no el detalle categoría por categoría
-     * — no hace falta reconstruir acá algo que nadie va a mostrar.
+     * Además de 'grupos' (subtotal por tipo, lo único que necesita
+     * comparativo()), arma 'categorias' (subtotal por categoría —
+     * nivel "categoría", ver Categoria::categoria_de(), nunca por
+     * subcategoría suelta) CON SIGNO (Ingresos positivo, Egresos y
+     * Gastos negativo, el mismo `$monto` crudo sin abs()): lo necesita
+     * variacion_por_categoria() para el waterfall del Requisito B —
+     * hasta esa función, nadie pedía el detalle categoría por
+     * categoría de este reporte, por eso antes no se armaba.
      *
-     * @return array<int,array{etiqueta:string, grupos:array<int,array{nombre:string,subtotal:float}>, diferencia:float}>
+     * @return array<int,array{etiqueta:string, grupos:array<int,array{nombre:string,subtotal:float}>, categorias:array<int,array{nombre:string,total:float}>, diferencia:float}>
      */
     private function comparativo_real($user_id, $año, $mes)
     {
@@ -713,6 +1016,7 @@ class Tablero
                 $monedas[$moneda] = [
                     'etiqueta'   => BilleteraManagement::get_instance()->moneda_label($moneda),
                     'grupos'     => [],
+                    'categorias' => [],
                     'diferencia' => 0.0,
                 ];
             }
@@ -725,6 +1029,18 @@ class Tablero
             }
 
             $monedas[$moneda]['grupos'][$tipo->term_id]['subtotal'] += $monto;
+
+            $categoria_term   = $categoria->categoria_de($term_id);
+            $categoria_id     = $categoria_term ? $categoria_term->term_id : $term_id;
+            $categoria_nombre = $categoria_term ? $categoria_term->name : $tipo->name;
+
+            if (!isset($monedas[$moneda]['categorias'][$categoria_id])) {
+                $monedas[$moneda]['categorias'][$categoria_id] = [
+                    'nombre' => $categoria_nombre,
+                    'total'  => 0.0,
+                ];
+            }
+            $monedas[$moneda]['categorias'][$categoria_id]['total'] += $monto;
         }
 
         foreach ($monedas as &$reporte) {
@@ -739,10 +1055,489 @@ class Tablero
                 }
             }
 
-            $reporte['diferencia'] = round($ingresos - $egresos, 2);
+            // SUMA, no resta: $egresos ya es negativo acá (es el
+            // subtotal de `$monto` crudo de Egresos y Gastos, y
+            // `_monto` se guarda con signo — ver Libro.php, "positivo
+            // -> Ingreso, negativo -> Egreso"). Restar un número que
+            // ya es negativo lo SUMA dos veces en vez de netearlo
+            // (bug real que encontró Edwin: el Superávit/Déficit daba
+            // inflado en vez del neto correcto apenas había algún
+            // egreso). Esto es lo único que corresponde arreglar acá
+            // — $ingresos y $egresos de PresupuestoManagement::monedas_de()
+            // SÍ se restan bien entre sí (ver su propio cálculo de
+            // 'diferencia'), porque ahí las dos magnitudes son
+            // siempre positivas, sin signo que perder.
+            $reporte['diferencia'] = round($ingresos + $egresos, 2);
         }
         unset($reporte);
 
         return $monedas;
+    }
+
+    /**
+     * Variación (real − presupuestado) por categoría, con Ingresos y
+     * Egresos y Gastos ya MEZCLADOS en una sola lista — a diferencia
+     * del resto del Tablero, que siempre los separa, el waterfall del
+     * Requisito B lo pidió Edwin así explícitamente ("un solo
+     * gráfico... el pareto de los aumentos y disminuciones", eligió
+     * la opción combinada entre las que se le ofrecieron).
+     *
+     * Los dos lados quedan en la MISMA convención de signo que ya usa
+     * comparativo_real()/comparativo() para la fila "Diferencia": un
+     * Ingreso suma, un Egreso resta. `categorias` de comparativo_real()
+     * ya viene así (`$monto` crudo, sin abs()); lo presupuestado
+     * (PresupuestoManagement::monedas_de(), siempre positivo porque
+     * ahí no hay signo que perder — es un monto planeado, no un
+     * movimiento real) se lleva a la misma convención acá: se resta
+     * si es de "Egresos y Gastos", se suma si es de "Ingresos". Así,
+     * la suma de TODAS las variaciones de categoría coincide EXACTO
+     * con (real_total − presupuestado_total) — el punto de llegada
+     * del waterfall (ver waterfall_presupuesto()), sin ningún ajuste
+     * de redondeo aparte para que la cascada "cierre".
+     *
+     * Agrupa por categoría (nivel "categoría", ver
+     * Categoria::categoria_de()) usando el `term_id` que
+     * monedas_de() expone en cada fila — necesario porque el término
+     * asignado a un Presupuesto puede ser una subcategoría, y no
+     * corresponde mostrarla suelta en el waterfall (mismo criterio
+     * que ya aplica clasificar() para los 4 Pareto existentes).
+     *
+     * Transferencias queda afuera en los dos lados: comparativo_real()
+     * ya las descarta, y monedas_de() nunca las agrupa bajo 'Ingresos'
+     * ni 'Egresos y Gastos' (el filtro explícito de acá abajo evita
+     * arrastrar un presupuesto cargado, por error, con una categoría
+     * de Transferencias).
+     *
+     * `tiene_presupuesto` (`$reporte_presup['grupos']` no vacío, es
+     * decir: existe al menos un Presupuesto cargado para esa moneda en
+     * $año) es lo que usa waterfall_presupuesto() para no dibujar la
+     * cascada cuando no hay NADA presupuestado — Edwin fue explícito
+     * ("cuando el usuario no tenga presupuesto no se muestre el
+     * waterfall"). Es distinto de "presupuestado_total == 0.0": ese
+     * total puede dar 0 porque Ingresos presupuestado == Egresos
+     * presupuestado (sí hay presupuesto cargado, casualmente neto
+     * cero) — `tiene_presupuesto` no se confunde con ese caso.
+     *
+     * @return array<int,array{presupuestado_total:float, real_total:float, tiene_presupuesto:bool, categorias:array<int,array{nombre:string, variacion:float}>}>
+     */
+    private function variacion_por_categoria($user_id, $año, $mes)
+    {
+        $real          = $this->comparativo_real($user_id, $año, $mes);
+        $presupuestado = PresupuestoManagement::get_instance()->monedas_de($user_id, $año, $mes);
+        $categoria     = Categoria::get_instance();
+
+        $resultado = [];
+
+        foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
+            $reporte_real   = $real[$moneda_id] ?? ['categorias' => [], 'diferencia' => 0.0];
+            $reporte_presup = $presupuestado[$moneda_id] ?? ['grupos' => [], 'diferencia' => 0.0];
+
+            $categorias = [];
+            foreach ($reporte_real['categorias'] as $categoria_id => $fila) {
+                $categorias[$categoria_id] = [
+                    'nombre'    => $fila['nombre'],
+                    'variacion' => $fila['total'],
+                ];
+            }
+
+            foreach ($reporte_presup['grupos'] as $grupo) {
+                if (!in_array($grupo['nombre'], ['Ingresos', 'Egresos y Gastos'], true)) {
+                    continue;
+                }
+                $signo = $grupo['nombre'] === 'Ingresos' ? 1 : -1;
+
+                foreach ($grupo['filas'] as $fila) {
+                    $categoria_term   = $categoria->categoria_de($fila['term_id']);
+                    $categoria_id     = $categoria_term ? $categoria_term->term_id : $fila['term_id'];
+                    $categoria_nombre = $categoria_term ? $categoria_term->name : $fila['categoria'];
+
+                    if (!isset($categorias[$categoria_id])) {
+                        $categorias[$categoria_id] = ['nombre' => $categoria_nombre, 'variacion' => 0.0];
+                    }
+
+                    $categorias[$categoria_id]['variacion'] -= $signo * $fila['monto'];
+                }
+            }
+
+            $resultado[$moneda_id] = [
+                'presupuestado_total' => round($reporte_presup['diferencia'] ?? 0.0, 2),
+                'real_total'          => round($reporte_real['diferencia'] ?? 0.0, 2),
+                'tiene_presupuesto'   => !empty($reporte_presup['grupos']),
+                'categorias'          => $categorias,
+            ];
+        }
+
+        return $resultado;
+    }
+
+    /**
+     * Mismo recorte 80/20 que armar_pareto(), pero para datos CON
+     * SIGNO (variación real − presupuestado por categoría: puede ser
+     * un aumento, positivo, o una disminución, negativo) — no puede
+     * reusar armar_pareto() tal cual, que asume totales siempre
+     * positivos sumando al 100% de un total general. Acá el ranking y
+     * el corte del 80% se hacen por MAGNITUD (valor absoluto), pero el
+     * signo de cada categoría viaja intacto a $resultado, porque es lo
+     * que decide su color en tablero.js (verde/rojo, ver
+     * waterfall_presupuesto()).
+     *
+     * "Otros" suma el resto CON SIGNO (no en valor absoluto): si lo
+     * que sobra es mayormente disminuciones, "Otros" queda negativo —
+     * y viceversa — para que la cascada siga cerrando exacto en el
+     * total Real, la misma propiedad que ya garantiza
+     * variacion_por_categoria().
+     *
+     * Categorías sin variación (real == presupuestado, diferencia
+     * 0.00) se descartan antes de rankear: una barra plana no aporta
+     * nada al waterfall.
+     *
+     * @return array<int,array{nombre:string, variacion:float, es_otros:bool}>
+     */
+    private function armar_pareto_variacion($categorias)
+    {
+        $categorias = array_filter($categorias, function ($fila) {
+            return round($fila['variacion'], 2) !== 0.0;
+        });
+
+        if (empty($categorias)) {
+            return [];
+        }
+
+        uasort($categorias, function ($a, $b) {
+            return abs($b['variacion']) <=> abs($a['variacion']);
+        });
+
+        $total_general = array_sum(array_map('abs', array_column($categorias, 'variacion')));
+        if ($total_general <= 0) {
+            return [];
+        }
+
+        $resultado = [];
+        $acumulado = 0.0;
+        $otros     = 0.0;
+
+        foreach ($categorias as $fila) {
+            if (($acumulado / $total_general) >= 0.80) {
+                $otros += $fila['variacion'];
+                continue;
+            }
+
+            $resultado[] = [
+                'nombre'    => $fila['nombre'],
+                'variacion' => round($fila['variacion'], 2),
+                'es_otros'  => false,
+            ];
+            $acumulado += abs($fila['variacion']);
+        }
+
+        if (round($otros, 2) !== 0.0) {
+            $resultado[] = [
+                'nombre'    => __('Otros', 'egc'),
+                'variacion' => round($otros, 2),
+                'es_otros'  => true,
+            ];
+        }
+
+        return $resultado;
+    }
+
+    /**
+     * "Cascada" (bridge chart) de variación del presupuesto: arranca
+     * en el total REAL, atraviesa la variación de cada categoría (ya
+     * mezcladas Ingresos y Egresos y Gastos, ver
+     * variacion_por_categoria()) en el mismo orden que armó el 80/20
+     * de armar_pareto_variacion(), y termina en el total Presupuestado
+     * — Edwin pidió explícito este sentido ("debe iniciar del real al
+     * presupuesto"), al revés del orden en que se armaron los datos
+     * (variacion_por_categoria() sigue calculando real − presupuestado,
+     * eso no cambia: cada segmento acá se RESTA en vez de sumarse, así
+     * el recorrido queda invertido sin tocar el signo de "aumento" o
+     * "disminución" de cada categoría, que sigue siendo el mismo con
+     * cualquiera de los dos sentidos). Cada elemento de 'barras' ya
+     * trae 'desde'/'hasta' listos para que tablero.js dibuje una barra
+     * flotante de Chart.js sin tener que acumular nada del lado del
+     * cliente (SEPARACIÓN DE CAPAS: la cuenta es lógica, no
+     * presentación).
+     *
+     * 'tipo' distingue color en tablero.js: 'presupuestado'/'real'
+     * (barras ancla, color neutro) vs. 'aumento'/'disminucion' (verde/
+     * rojo, según el signo de esa variación puntual — Edwin: "verde
+     * para aumentos y rojo para disminuciones").
+     *
+     * Sin presupuesto cargado para una moneda (ver
+     * `tiene_presupuesto` de variacion_por_categoria()), 'barras'
+     * queda vacío para esa moneda — Edwin fue explícito: "cuando el
+     * usuario no tenga presupuesto no se muestre el gráfico waterfall".
+     * La vista (modules/sgf/views/tablero.php) esconde el `<canvas>`
+     * únicamente cuando 'barras' viene VACÍO (`empty()`), así que un
+     * array vacío alcanza para ocultarlo del todo, sin que la vista
+     * necesite consultar 'tiene_presupuesto' por su cuenta — a
+     * propósito NO se esconde solo porque 'barras' tenga los dos
+     * anclajes nomás (Real == Presupuestado, ninguna categoría varió):
+     * eso sigue siendo presupuesto real, solo que sin diferencia que
+     * graficar, y es un caso distinto de "no hay presupuesto cargado"
+     * (mismo criterio que corrigió el bug real de
+     * waterfall_interanual(), ver su propio docblock).
+     *
+     * NUNCA combina las dos monedas entre sí (sumar montos de monedas
+     * distintas no tiene sentido sin un tipo de cambio — tema que
+     * Edwin dejó pendiente a propósito): un gráfico por moneda,
+     * siempre las dos, sin filtrar por monedas_con_billetera() — igual
+     * que el resto del Comparativo, esta sección no se ve afectada por
+     * el Requisito A (Edwin: "esto aplica únicamente para los
+     * gráficos, el presupuesto queda igual").
+     *
+     * @return array<int,array{
+     *   etiqueta:string,
+     *   barras:array<int,array{etiqueta:string, desde:float, hasta:float, tipo:string}>,
+     * }>
+     */
+    private function waterfall_presupuesto($user_id, $año, $mes)
+    {
+        $variaciones = $this->variacion_por_categoria($user_id, $año, $mes);
+
+        $resultado = [];
+
+        foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
+            $reporte = $variaciones[$moneda_id] ?? [
+                'presupuestado_total' => 0.0,
+                'real_total'          => 0.0,
+                'tiene_presupuesto'   => false,
+                'categorias'          => [],
+            ];
+
+            if (!$reporte['tiene_presupuesto']) {
+                $resultado[$moneda_id] = [
+                    'etiqueta' => BilleteraManagement::get_instance()->moneda_label($moneda_id),
+                    'barras'   => [],
+                ];
+                continue;
+            }
+
+            $segmentos = $this->armar_pareto_variacion($reporte['categorias']);
+
+            $barras   = [];
+            $barras[] = [
+                'etiqueta' => __('Real', 'egc'),
+                'desde'    => 0.0,
+                'hasta'    => round($reporte['real_total'], 2),
+                'tipo'     => 'real',
+            ];
+
+            $cursor = $reporte['real_total'];
+            foreach ($segmentos as $segmento) {
+                $siguiente = $cursor - $segmento['variacion'];
+
+                $barras[] = [
+                    'etiqueta' => $segmento['nombre'],
+                    'desde'    => round($cursor, 2),
+                    'hasta'    => round($siguiente, 2),
+                    'tipo'     => $segmento['variacion'] >= 0 ? 'aumento' : 'disminucion',
+                ];
+
+                $cursor = $siguiente;
+            }
+
+            $barras[] = [
+                'etiqueta' => __('Presupuestado', 'egc'),
+                'desde'    => 0.0,
+                'hasta'    => round($reporte['presupuestado_total'], 2),
+                'tipo'     => 'presupuestado',
+            ];
+
+            $resultado[$moneda_id] = [
+                'etiqueta' => BilleteraManagement::get_instance()->moneda_label($moneda_id),
+                'barras'   => $barras,
+            ];
+        }
+
+        return $resultado;
+    }
+
+    /**
+     * Variación (real $año_actual − real $año_anterior) por
+     * categoría, acumulado Enero a $mes de cada año — mismo criterio
+     * "combinado" (Ingresos y Egresos y Gastos ya mezclados en una
+     * sola lista) que ya usa variacion_por_categoria() para el
+     * waterfall real-vs-presupuesto (ver su docblock): ahí se combina
+     * REAL contra PRESUPUESTADO, acá se combina el mismo REAL de dos
+     * años distintos, así que aplica el mismo razonamiento sin
+     * repetirlo.
+     *
+     * Reusa comparativo_real() tal cual para los dos lados — es
+     * exactamente el mismo cálculo de acumulado (Enero 1 al último
+     * día de $mes) que ya usa el Comparativo real-vs-presupuesto,
+     * llamado dos veces con años distintos en vez de una vez con el
+     * año/mes del selector de Presupuesto.
+     *
+     * `tiene_dato_anterior` (existe `$anterior[$moneda_id]`, es decir:
+     * hubo al menos un movimiento que cuenta en $año_anterior para esa
+     * moneda) es lo que usa waterfall_interanual() para no dibujar el
+     * waterfall cuando no hay NADA del año anterior — Edwin fue
+     * explícito ("en caso de que no se cuente con información del año
+     * anterior esta sección no mostrará el gráfico pero sí el
+     * título").
+     *
+     * $monedas_disponibles (Tablero::monedas_con_billetera()) acota
+     * qué monedas se calculan acá — Edwin pidió explícito extender acá
+     * el mismo análisis del Requisito A ("es necesario hacer el
+     * análisis de que si el usuario cuenta con billeteras con las dos
+     * monedas"): sin ninguna billetera en una moneda, ni su título ni
+     * su gráfico tienen que aparecer en esta sección. Esto revierte lo
+     * que decía antes el docblock de esta función (que el Comparativo
+     * interanual quedaba afuera del Requisito A) — Edwin lo corrigió
+     * explícito para esta sección en particular; waterfall_presupuesto()
+     * sigue afuera, eso no cambió.
+     *
+     * @param array<int,int> $monedas_disponibles
+     * @return array<int,array{actual_total:float, anterior_total:float, tiene_dato_anterior:bool, categorias:array<int,array{nombre:string, variacion:float}>}>
+     */
+    private function variacion_interanual($user_id, $año_actual, $año_anterior, $mes, $monedas_disponibles)
+    {
+        $actual   = $this->comparativo_real($user_id, $año_actual, $mes);
+        $anterior = $this->comparativo_real($user_id, $año_anterior, $mes);
+
+        $resultado = [];
+
+        foreach ($monedas_disponibles as $moneda_id) {
+            $reporte_actual   = $actual[$moneda_id] ?? ['categorias' => [], 'diferencia' => 0.0];
+            $reporte_anterior = $anterior[$moneda_id] ?? null;
+
+            $categorias = [];
+            foreach ($reporte_actual['categorias'] as $categoria_id => $fila) {
+                $categorias[$categoria_id] = [
+                    'nombre'    => $fila['nombre'],
+                    'variacion' => $fila['total'],
+                ];
+            }
+
+            if ($reporte_anterior !== null) {
+                foreach ($reporte_anterior['categorias'] as $categoria_id => $fila) {
+                    if (!isset($categorias[$categoria_id])) {
+                        $categorias[$categoria_id] = ['nombre' => $fila['nombre'], 'variacion' => 0.0];
+                    }
+                    $categorias[$categoria_id]['variacion'] -= $fila['total'];
+                }
+            }
+
+            $resultado[$moneda_id] = [
+                'actual_total'        => round($reporte_actual['diferencia'] ?? 0.0, 2),
+                'anterior_total'      => round($reporte_anterior['diferencia'] ?? 0.0, 2),
+                'tiene_dato_anterior' => $reporte_anterior !== null,
+                'categorias'          => $categorias,
+            ];
+        }
+
+        return $resultado;
+    }
+
+    /**
+     * "Cascada" (bridge chart) del Comparativo interanual: arranca en
+     * el total REAL acumulado de $año_anterior, atraviesa la
+     * variación de cada categoría (ya mezcladas Ingresos y Egresos y
+     * Gastos, ver variacion_interanual()) en el mismo orden que armó
+     * el 80/20 de armar_pareto_variacion(), y termina en el total REAL
+     * acumulado de $año_actual — a diferencia del waterfall
+     * real-vs-presupuesto (que Edwin pidió invertir a "del real al
+     * presupuesto"), acá el sentido cronológico (año anterior primero,
+     * año actual después) es el que corresponde sin ambigüedad, no
+     * hizo falta preguntarlo.
+     *
+     * Sin ningún movimiento que cuente en $año_anterior para una
+     * moneda (ver `tiene_dato_anterior` de variacion_interanual()),
+     * 'barras' queda vacío para esa moneda — Edwin fue explícito:
+     * "esta sección no mostrará el gráfico pero sí el título". La
+     * vista (modules/sgf/views/tablero.php) esconde el `<canvas>`
+     * únicamente cuando 'barras' viene VACÍO (`empty()`), no cuando
+     * tiene solo los dos anclajes: cuando SÍ hay dato del año anterior
+     * pero ninguna categoría varió (real de $año_actual idéntico al
+     * de $año_anterior, categoría por categoría), armar_pareto_variacion()
+     * devuelve el tramo de segmentos vacío y 'barras' se queda con
+     * los dos anclajes nomás — eso sigue siendo información real
+     * ("no hubo variación"), muy distinto de "no hay dato del año
+     * anterior", así que no corresponde ocultarlo igual. (Este era el
+     * bug real que reportó Edwin: "no se está mostrando el gráfico
+     * para la moneda local que sí cuenta con información para ambos
+     * años" — el chequeo anterior de la vista, `count($barras) > 2`,
+     * trataba ese caso exactamente igual que "sin dato anterior" y lo
+     * ocultaba también a él.)
+     *
+     * $monedas_disponibles la recibe tal cual de view_state() (mismo
+     * Tablero::monedas_con_billetera() que ya filtra los gráficos del
+     * Requisito A) y solo la reenvía a variacion_interanual(): sin
+     * ninguna billetera en una moneda, esa moneda ni siquiera entra al
+     * `foreach` de acá, así que $resultado no trae ninguna entrada
+     * para ella — ni título ni gráfico en la vista, que se limita a
+     * recorrer lo que $resultado le da.
+     *
+     * NUNCA combina las dos monedas entre sí, mismo motivo de siempre
+     * (sin tipo de cambio no tiene sentido) — un gráfico por moneda.
+     *
+     * @param array<int,int> $monedas_disponibles
+     * @return array<int,array{
+     *   etiqueta:string,
+     *   barras:array<int,array{etiqueta:string, desde:float, hasta:float, tipo:string}>,
+     * }>
+     */
+    private function waterfall_interanual($user_id, $año_actual, $año_anterior, $mes, $monedas_disponibles)
+    {
+        $variaciones = $this->variacion_interanual($user_id, $año_actual, $año_anterior, $mes, $monedas_disponibles);
+
+        $resultado = [];
+
+        foreach ($monedas_disponibles as $moneda_id) {
+            $reporte = $variaciones[$moneda_id] ?? [
+                'actual_total'        => 0.0,
+                'anterior_total'      => 0.0,
+                'tiene_dato_anterior' => false,
+                'categorias'          => [],
+            ];
+
+            if (!$reporte['tiene_dato_anterior']) {
+                $resultado[$moneda_id] = [
+                    'etiqueta' => BilleteraManagement::get_instance()->moneda_label($moneda_id),
+                    'barras'   => [],
+                ];
+                continue;
+            }
+
+            $segmentos = $this->armar_pareto_variacion($reporte['categorias']);
+
+            $barras   = [];
+            $barras[] = [
+                'etiqueta' => (string) $año_anterior,
+                'desde'    => 0.0,
+                'hasta'    => round($reporte['anterior_total'], 2),
+                'tipo'     => 'anterior',
+            ];
+
+            $cursor = $reporte['anterior_total'];
+            foreach ($segmentos as $segmento) {
+                $siguiente = $cursor + $segmento['variacion'];
+
+                $barras[] = [
+                    'etiqueta' => $segmento['nombre'],
+                    'desde'    => round($cursor, 2),
+                    'hasta'    => round($siguiente, 2),
+                    'tipo'     => $segmento['variacion'] >= 0 ? 'aumento' : 'disminucion',
+                ];
+
+                $cursor = $siguiente;
+            }
+
+            $barras[] = [
+                'etiqueta' => (string) $año_actual,
+                'desde'    => 0.0,
+                'hasta'    => round($reporte['actual_total'], 2),
+                'tipo'     => 'actual',
+            ];
+
+            $resultado[$moneda_id] = [
+                'etiqueta' => BilleteraManagement::get_instance()->moneda_label($moneda_id),
+                'barras'   => $barras,
+            ];
+        }
+
+        return $resultado;
     }
 }
