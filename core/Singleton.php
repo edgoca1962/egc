@@ -15,6 +15,9 @@ if (!defined('ABSPATH')) {
  */
 trait Singleton
 {
+    /**
+     * @return static
+     */
     final public static function get_instance()
     {
         static $instances = [];

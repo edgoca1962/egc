@@ -88,6 +88,39 @@ $state   = $manager->view_state();
                 ?>
             </div>
         <?php endif; ?>
+
+        <?php
+        /**
+         * Duplicados: mismo criterio que "billetera inválida" arriba
+         * (resumen agregado, nunca fila por fila — ver el docblock de
+         * LibroImportacion sobre "Reporte de duplicados") — una fila
+         * por moneda, porque LibroImportacion::procesar_filas() nunca
+         * mezcla el monto neto de Moneda Local con el de Moneda
+         * Extranjera.
+         */
+        ?>
+        <?php if (!empty($resultado['duplicados'])) : ?>
+            <div class="alert alert-info">
+                <p class="mb-0">
+                    <?php esc_html_e('Estos registros ya existían y no se volvieron a importar:', 'egc'); ?>
+                </p>
+                <ul class="mb-0">
+                    <?php foreach ($resultado['duplicados'] as $resumen) : ?>
+                        <li>
+                            <?php
+                            printf(
+                                /* translators: 1: moneda, 2: cantidad de registros duplicados, 3: monto neto de esos registros */
+                                esc_html__('%1$s: %2$d registros (monto neto: %3$s).', 'egc'),
+                                esc_html($resumen['etiqueta']),
+                                (int) $resumen['cantidad'],
+                                esc_html(number_format_i18n($resumen['monto_neto'], 2))
+                            );
+                            ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+        <?php endif; ?>
     <?php endif; ?>
 
     <div class="card">

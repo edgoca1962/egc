@@ -7,6 +7,7 @@ use EGC\Core\Pages;
 use EGC\Core\Singleton;
 use EGC\Core\UserScope;
 use EGC\Modules\Sgf\Billetera\Billetera;
+use EGC\Modules\Sgf\Billetera\BilleteraManagement;
 
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
@@ -90,6 +91,24 @@ if (!defined('ABSPATH')) {
  * archivo subido dos veces, o una fila que ya se había cargado a
  * mano, no duplica nada.
  *
+ * Reporte de duplicados (Edwin lo pidió explícito, afinando el
+ * comportamiento original): se siguen IGNORANDO en silencio, sin
+ * detalle fila por fila — antes se listaban agrupadas junto con el
+ * resto de los errores ("Filas: 5, 12, 47…"), y Edwin pidió que en vez
+ * de eso quede solo una alerta agregada con el total de registros y su
+ * monto neto, mismo criterio de "resumen, no detalle" que ya usa
+ * 'billetera_invalida' (ver su propio docblock más abajo) — un
+ * duplicado no es un error del archivo que corregir fila por fila, es
+ * el caso esperado de resubir un archivo ya cargado antes, o uno que
+ * se solapa en parte con carga manual previa. Por eso queda AFUERA de
+ * ORDEN_TIPOS_ERROR — procesar_filas() lo agrupa aparte, en
+ * `duplicados`, no en `grupos`. El monto neto se suma POR MONEDA (ver
+ * `duplicados` en procesar_filas()), nunca mezclando Moneda Local y
+ * Moneda Extranjera entre sí — mismo motivo de siempre en todo este
+ * módulo (Tablero.php): sumar montos de monedas distintas sin tipo de
+ * cambio no tiene sentido, y un único archivo de importación puede
+ * traer filas de billeteras de las dos monedas a la vez.
+ *
  * `_debe`/`_haber` viajan como columnas propias del archivo — el
  * propio docblock original de Libro::register_post_meta() ya
  * anticipaba este momento ("nadie los carga directo, salvo la futura
@@ -150,10 +169,11 @@ class LibroImportacion
      * acá) para que el escaneo de traducciones de WordPress pueda
      * encontrar cada __() como string literal, no como variable.
      *
-     * "billetera_invalida" queda AFUERA a propósito: esa no se lista
-     * fila por fila (ver el docblock de la clase sobre "billetera que
-     * no existe") — se resume aparte, como una alerta, en
-     * procesar_filas().
+     * "billetera_invalida" y "duplicado" quedan AFUERA a propósito:
+     * ninguna de las dos se lista fila por fila (ver el docblock de la
+     * clase sobre "billetera que no existe" y sobre "Reporte de
+     * duplicados") — cada una se resume aparte, como su propia alerta,
+     * en procesar_filas().
      */
     const ORDEN_TIPOS_ERROR = [
         'fecha_formato',
@@ -161,7 +181,6 @@ class LibroImportacion
         'descripcion_vacia',
         'referencia_vacia',
         'montos_no_numericos',
-        'duplicado',
         'error_wp',
     ];
 
@@ -272,6 +291,7 @@ class LibroImportacion
                 'insertados'            => 0,
                 'grupos'                => [],
                 'billeteras_invalidas'  => null,
+                'duplicados'            => null,
                 'error_archivo'         => __('No se pudo leer el archivo — subí un CSV con las columnas ID Billetera, Fecha, Descripción, Debe, Haber y Referencia.', 'egc'),
             ]);
             $this->back();
@@ -441,7 +461,15 @@ class LibroImportacion
      * es ruido, no información. En vez de eso queda una sola alerta
      * con el total y los IDs distintos que no se pudieron resolver.
      *
-     * @return array{insertados:int, grupos:array, billeteras_invalidas:?array, error_archivo:?string}
+     * "Duplicado" se resume distinto también, y por el mismo motivo
+     * (ver el docblock de la clase, "Reporte de duplicados"): en vez
+     * de listar filas, `duplicados` trae cantidad y monto neto, UNA
+     * ENTRADA POR MONEDA (billetera_id => moneda, resuelta en
+     * insertar_fila() al momento del chequeo) — nunca un solo total
+     * mezclando Moneda Local y Moneda Extranjera, mismo criterio que
+     * ya aplica todo Tablero.php.
+     *
+     * @return array{insertados:int, grupos:array, billeteras_invalidas:?array, duplicados:?array, error_archivo:?string}
      */
     private function procesar_filas($filas, $user_id)
     {
@@ -463,6 +491,7 @@ class LibroImportacion
         $insertados               = 0;
         $filas_por_tipo           = array_fill_keys(self::ORDEN_TIPOS_ERROR, []);
         $ids_billetera_invalidos  = [];
+        $duplicados_por_moneda    = [];
         $ultimo_movimiento_por_billetera = [];
 
         $numero_fila = 1;
@@ -479,6 +508,16 @@ class LibroImportacion
 
             if ($resultado['codigo'] === 'billetera_invalida') {
                 $ids_billetera_invalidos[] = $resultado['billetera_id_original'];
+                continue;
+            }
+
+            if ($resultado['codigo'] === 'duplicado') {
+                $moneda = $resultado['moneda'];
+                if (!isset($duplicados_por_moneda[$moneda])) {
+                    $duplicados_por_moneda[$moneda] = ['cantidad' => 0, 'monto_neto' => 0.0];
+                }
+                $duplicados_por_moneda[$moneda]['cantidad']++;
+                $duplicados_por_moneda[$moneda]['monto_neto'] += $resultado['monto'];
                 continue;
             }
 
@@ -511,10 +550,23 @@ class LibroImportacion
             ];
         }
 
+        $duplicados = null;
+        if (!empty($duplicados_por_moneda)) {
+            $duplicados = [];
+            foreach ($duplicados_por_moneda as $moneda => $resumen) {
+                $duplicados[] = [
+                    'etiqueta'   => BilleteraManagement::get_instance()->moneda_label($moneda),
+                    'cantidad'   => $resumen['cantidad'],
+                    'monto_neto' => round($resumen['monto_neto'], 2),
+                ];
+            }
+        }
+
         return [
             'insertados'           => $insertados,
             'grupos'               => $grupos,
             'billeteras_invalidas' => $billeteras_invalidas,
+            'duplicados'           => $duplicados,
             'error_archivo'        => null,
         ];
     }
@@ -539,8 +591,6 @@ class LibroImportacion
                 return __('La referencia no puede quedar vacía.', 'egc');
             case 'montos_no_numericos':
                 return __('Debe y Haber tienen que ser números.', 'egc');
-            case 'duplicado':
-                return __('Ya existe un movimiento con esa misma fecha, monto y referencia en esa billetera.', 'egc');
             case 'error_wp':
                 return __('No se pudo guardar el movimiento.', 'egc');
             default:
@@ -708,7 +758,10 @@ class LibroImportacion
      *   con mensaje_tipo_error()), salvo 'billetera_invalida', que
      *   además trae 'billetera_id_original' (el valor tal como vino
      *   en el archivo, para el resumen de billeteras no encontradas —
-     *   ver el docblock de procesar_filas()).
+     *   ver el docblock de procesar_filas()), y salvo 'duplicado', que
+     *   además trae 'monto' y 'moneda' (para el resumen agregado por
+     *   moneda de procesar_filas(), ver "Reporte de duplicados" en el
+     *   docblock de la clase).
      *
      * Fecha: `AAAA-MM-DD` exacto por regex, después checkdate() nativo
      * de PHP — atrapa fechas con la forma correcta pero imposibles
@@ -726,7 +779,7 @@ class LibroImportacion
      * Debe/Haber: ver parsear_monto() sobre el formato de miles y
      * decimales que se exige.
      *
-     * @return array{ok:true, post_id:int, billetera_id:int}|array{ok:false, codigo:string, billetera_id_original?:string}
+     * @return array{ok:true, post_id:int, billetera_id:int}|array{ok:false, codigo:string, billetera_id_original?:string, monto?:float, moneda?:int}
      */
     private function insertar_fila($fila, $billeteras_permitidas)
     {
@@ -786,7 +839,17 @@ class LibroImportacion
         // existe_duplicado()): hace falta $monto ya calculado, por eso
         // este chequeo va después de parsear Debe/Haber, no antes.
         if ($this->existe_duplicado($billetera_id, $año, $mes, $dia, $monto, $referencia)) {
-            return ['ok' => false, 'codigo' => 'duplicado'];
+            // 'moneda' viaja junto con 'monto' para que
+            // procesar_filas() pueda sumar el monto neto de
+            // duplicados POR MONEDA, nunca mezclando Local y
+            // Extranjera (ver "Reporte de duplicados" en el docblock
+            // de la clase).
+            return [
+                'ok'     => false,
+                'codigo' => 'duplicado',
+                'monto'  => $monto,
+                'moneda' => (int) get_post_meta($billetera_id, '_moneda', true),
+            ];
         }
 
         $data = [
