@@ -64,6 +64,12 @@ class PostManagement
         add_action('admin_post_' . self::ACTION_TRASH, [$this, 'handle_trash']);
         add_action('admin_post_' . self::ACTION_PUBLICAR, [$this, 'handle_publicar']);
 
+        // Ver scope_archive_query(): sin esto, un Contributor no tiene
+        // forma de volver a encontrar su propia entrada pending para
+        // editarla, porque la consulta nativa del archive solo trae
+        // publish.
+        add_action('pre_get_posts', [$this, 'scope_archive_query']);
+
         // El enlace al archive de 'post' en el dropdown del avatar ya
         // sale solo (UserScope::modulo_links()/autor_links() lo arman
         // genéricamente a partir del manifest) — este filtro solo suma
@@ -176,6 +182,66 @@ class PostManagement
             wp_safe_redirect($this->archive_url());
             exit;
         }
+    }
+
+    /**
+     * Suma, solo para quien está viendo su propio contenido, las
+     * entradas `pending` propias a la consulta PRINCIPAL del archive
+     * público. is_home() es la condición nativa de WordPress para "la
+     * página de entradas del blog" (portada o page_for_posts, no hace
+     * falta distinguir) — la misma que resuelve archive.php.
+     *
+     * Por diseño nativo esa consulta solo trae `publish`. Un
+     * Contributor no tiene publish_posts (ver manifest.php), así que
+     * sus entradas nuevas quedan en `pending` (handle_save()) y, sin
+     * esto, no existía ningún lugar donde volviera a encontrarlas para
+     * editarlas — ni siquiera entrando directo a su propia URL, porque
+     * WordPress tampoco sirve un post no publicado sin un link de
+     * vista previa con nonce. No es que faltara el botón de Editar: es
+     * que la fila nunca llegaba a pintarse.
+     *
+     * No se abre la consulta a CUALQUIER pending — eso ya lo resuelve
+     * articulos-pendientes.php, para quien administra el recurso
+     * (UserScope::manages('post')). Acá solo se evita que WordPress
+     * descarte pending de entrada; restrict_pending_to_owner() (colgado
+     * más abajo, de un solo uso) es quien de verdad limita esas filas a
+     * post_author = usuario actual, así que una pending ajena sigue sin
+     * aparecer. `draft` no se suma: el flujo de este módulo nunca
+     * genera ese estatus.
+     */
+    public function scope_archive_query($query)
+    {
+        if (is_admin() || !$query->is_main_query() || !$query->is_home()) {
+            return;
+        }
+
+        if (!is_user_logged_in()) {
+            return;
+        }
+
+        $query->set('post_status', ['publish', 'pending']);
+
+        add_filter('posts_where', [$this, 'restrict_pending_to_owner']);
+    }
+
+    /**
+     * Filtro de un solo uso para la consulta que scope_archive_query()
+     * acaba de marcar — ver ese método para el porqué. Se saca a sí
+     * mismo apenas corre, para no quedar enganchado a consultas
+     * secundarias de la misma carga de página (widgets, comentarios,
+     * etc.) que no tienen nada que ver con el archive y no deben
+     * filtrarse.
+     */
+    public function restrict_pending_to_owner($where)
+    {
+        remove_filter('posts_where', [$this, 'restrict_pending_to_owner']);
+
+        global $wpdb;
+
+        return $where . $wpdb->prepare(
+            " AND ( {$wpdb->posts}.post_status != 'pending' OR {$wpdb->posts}.post_author = %d )",
+            get_current_user_id()
+        );
     }
 
     /**
