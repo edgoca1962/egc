@@ -415,8 +415,15 @@ class BilleteraManagement
      * A diferencia de Blog (post nativo, sin archivo propio),
      * Billetera es un CPT real con has_archive => true: WordPress ya
      * resuelve su URL de listado solo.
+     *
+     * Promovido a public (Edwin lo pidió explícito): Tablero.php lo
+     * reusa para el aviso de "primeros pasos" — el caso de un usuario
+     * que YA tiene billeteras pero todavía no cargó ningún movimiento
+     * (ver Tablero::primeros_pasos()) lo manda acá, al listado de sus
+     * billeteras, no a url_editar() (esa es para CREAR una — no
+     * corresponde si ya tiene al menos una).
      */
-    private function archive_url()
+    public function archive_url()
     {
         $url = get_post_type_archive_link(Billetera::POST_TYPE);
 

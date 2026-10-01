@@ -103,6 +103,25 @@ $monedas_disponibles_cantidad = count($state['saldo_por_moneda']);
 <div class="container py-5">
     <h1 class="h3 mb-4"><?php esc_html_e('Tablero', 'egc'); ?></h1>
 
+    <?php
+    /**
+     * "Primeros pasos" (Tablero::primeros_pasos()): banner arriba de
+     * todo, cuando corresponde — Edwin fue explícito en que el resto
+     * de las secciones se sigue mostrando debajo tal cual (vacías o
+     * con lo poco que haya), este aviso no las reemplaza. Un solo
+     * bloque para los tres casos: cambia la leyenda y el destino del
+     * enlace, no la estructura.
+     */
+    ?>
+    <?php if ($state['primeros_pasos']) : ?>
+        <div class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+            <span><?php echo esc_html($state['primeros_pasos']['leyenda']); ?></span>
+            <a class="btn btn-primary btn-sm text-nowrap" href="<?php echo esc_url($state['primeros_pasos']['url']); ?>">
+                <?php echo esc_html($state['primeros_pasos']['boton']); ?>
+            </a>
+        </div>
+    <?php endif; ?>
+
     <div class="card mb-4">
         <div class="card-body">
             <form method="get" class="row g-3 align-items-end">

@@ -74,13 +74,3 @@ if (!defined('ABSPATH')) {
 </body>
 
 </html>
-<?php
-$movimientos = get_posts(array(
-    'post_type' => 'libro',
-    'posts_per_page' => -1,
-    'post_status' => 'publish',
-));
-foreach ($movimientos as $movimiento) {
-    // echo $movimiento->ID . ' - ' . $movimiento->post_title . '<br>';
-    // wp_delete_post($movimiento->ID,true);
-}

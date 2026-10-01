@@ -2,6 +2,7 @@
 
 namespace EGC\Modules\Sgf;
 
+use EGC\Core\Account;
 use EGC\Core\LoginPage;
 use EGC\Core\Pages;
 use EGC\Core\Singleton;
@@ -99,6 +100,22 @@ class Tablero
      * Tablero no tiene una capacidad más restrictiva propia: es una
      * vista agregada de datos que ya son visibles, uno por uno, en
      * otras pantallas a las que ya llega quien tiene acceso a Libro.
+     *
+     * El fallback de "está logueado pero sin capacidad sobre Libro" es
+     * Account::url() ("Mi cuenta"), NUNCA home_url('/') (bug real que
+     * encontró Edwin): home_url('/') es una URL fija, no
+     * necesariamente una página SIN este mismo guard — si el sitio
+     * define el Tablero como página de inicio (Edwin lo hizo), home_url('/')
+     * pasa a ser la URL DEL PROPIO TABLERO, y quien no tiene acceso
+     * queda en un loop infinito de redirects contra sí mismo (por eso
+     * "la página no se muestra": el navegador corta el loop con un
+     * error de demasiadas redirecciones). "Mi cuenta" es segura como
+     * destino porque su propio guard_access() (ver Account.php) exige
+     * únicamente is_user_logged_in(), sin ninguna capacidad de módulo
+     * de por medio — cualquier usuario logueado, tenga o no acceso a
+     * Libro, siempre puede aterrizar ahí sin volver a rebotar. El caso
+     * "no está logueado" de acá abajo no tiene este problema: LoginPage
+     * es una página distinta del Tablero en cualquier configuración.
      */
     public function guard_access()
     {
@@ -115,13 +132,14 @@ class Tablero
             || UserScope::get_instance()->authors(Libro::POST_TYPE);
 
         if (!$tiene_acceso) {
-            wp_safe_redirect(home_url('/'));
+            wp_safe_redirect(Account::get_instance()->url());
             exit;
         }
     }
 
     /**
      * @return array{
+     *   primeros_pasos: ?array{caso:string, leyenda:string, url:string, boton:string},
      *   filtros: array,
      *   billetera_opciones: array<int,string>,
      *   categoria_opciones_filtro: array,
@@ -167,6 +185,7 @@ class Tablero
         $mes_interanual          = $mes_max_interanual !== null ? $this->mes_interanual_seleccionado($mes_max_interanual) : null;
 
         return [
+            'primeros_pasos'            => $this->primeros_pasos($user_id),
             'filtros'                   => $filtros,
             'billetera_opciones'        => LibroManagement::get_instance()->billetera_opciones_propias($user_id),
             'categoria_opciones_filtro' => LibroManagement::get_instance()->categoria_opciones_filtro($user_id),
@@ -192,6 +211,123 @@ class Tablero
                 ? $this->waterfall_interanual($user_id, $año_actual_interanual, $año_anterior_interanual, $mes_interanual, $monedas_disponibles)
                 : [],
         ];
+    }
+
+    /**
+     * "Primeros pasos": el aviso que se imprime ARRIBA DE TODO en la
+     * vista (sin ocultar el resto de las secciones, Edwin lo pidió
+     * explícito) mientras Tablero todavía no tiene nada real que
+     * mostrarle a $user_id — tres casos, EXCLUYENTES entre sí y
+     * evaluados en este orden (el mismo orden en que Edwin los dio: es
+     * la secuencia natural de alta — primero una billetera, después un
+     * movimiento, después categorizarlo; el primero que aplica gana):
+     *
+     * 1. Ninguna billetera propia todavía → enlace a
+     *    BilleteraManagement::url_editar() (el formulario para CREAR
+     *    una).
+     * 2. Ya tiene billeteras, pero ningún movimiento cargado en
+     *    NINGUNA de ellas → enlace a BilleteraManagement::archive_url()
+     *    (el listado de sus propias billeteras). Un movimiento siempre
+     *    se agrega desde la billetera puntual a la que pertenece,
+     *    nunca desde una pantalla genérica del módulo Libro (ver
+     *    LibroManagement::nuevo_url_for(), que exige un
+     *    `?billetera_id=`) — como acá no hay ninguna billetera puntual
+     *    elegida de antemano (puede tener varias), el destino
+     *    correcto es el listado para que elija una y agregue el
+     *    movimiento desde ahí, no url_editar() (esa es para crear una
+     *    billetera NUEVA, no corresponde si ya tiene al menos una) —
+     *    Edwin fue explícito en que este caso también "lleva a
+     *    billetera", con esta leyenda distinta.
+     * 3. Tiene movimientos, pero NINGUNO está categorizado todavía →
+     *    enlace a Mantenimiento de movimientos con el filtro "sin
+     *    categorizar" ya aplicado (`categoria_filtro=0`, mismo
+     *    criterio que ya usa LibroManagement::construir_args_filtro()
+     *    para ese filtro). A propósito exige CERO categorizados, no
+     *    "al menos uno sin categorizar" (Edwin lo confirmó explícito):
+     *    en cuanto categoriza el primer movimiento, el Tablero ya
+     *    tiene datos reales que mostrar en sus secciones, y el aviso
+     *    de 'sin_categorizar' (cantidad + monto neto, ver
+     *    view_state()) sigue cubriendo, sin este banner, el caso de
+     *    que queden sueltos algunos sin categorizar.
+     *
+     * null si ninguno de los tres aplica (ya tiene al menos un
+     * movimiento categorizado) — la vista no imprime nada en ese caso.
+     *
+     * Las tres consultas de existencia usan `posts_per_page => 1`:
+     * alcanza con saber que existe AL MENOS UNO, nunca hace falta
+     * traer la lista completa para esto — mismo criterio que ya usa
+     * LibroImportacion::existe_duplicado().
+     *
+     * `boton` es el texto del enlace en sí (la vista no decide texto
+     * por caso, solo pinta — ver views/tablero.php): "Ir a Billetera"
+     * en los casos 1 y 2 (el destino real es Billetera en los dos,
+     * aunque con leyenda distinta), "Ir a Mantenimiento" en el caso 3.
+     *
+     * @return array{caso:string, leyenda:string, url:string, boton:string}|null
+     */
+    private function primeros_pasos($user_id)
+    {
+        $tiene_billeteras = !empty(get_posts([
+            'post_type'      => Billetera::POST_TYPE,
+            'author'         => $user_id,
+            'post_status'    => ['publish', 'pending'],
+            'posts_per_page' => 1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+        ]));
+
+        if (!$tiene_billeteras) {
+            return [
+                'caso'    => 'billetera',
+                'leyenda' => __('Todavía no tenés ninguna billetera cargada. Agregá al menos una para empezar a usar el Tablero.', 'egc'),
+                'url'     => BilleteraManagement::get_instance()->url_editar(),
+                'boton'   => __('Ir a Billetera', 'egc'),
+            ];
+        }
+
+        $tiene_movimientos = !empty(get_posts([
+            'post_type'      => Libro::POST_TYPE,
+            'author'         => $user_id,
+            'post_status'    => 'publish',
+            'posts_per_page' => 1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+        ]));
+
+        if (!$tiene_movimientos) {
+            return [
+                'caso'    => 'movimiento',
+                'leyenda' => __('Tenés billeteras cargadas, pero todavía no ingresaste ningún movimiento.', 'egc'),
+                'url'     => BilleteraManagement::get_instance()->archive_url(),
+                'boton'   => __('Ir a Billetera', 'egc'),
+            ];
+        }
+
+        $tiene_categorizado = !empty(get_posts([
+            'post_type'      => Libro::POST_TYPE,
+            'author'         => $user_id,
+            'post_status'    => 'publish',
+            'posts_per_page' => 1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+            'tax_query'      => [
+                [
+                    'taxonomy' => Categoria::TAXONOMY,
+                    'operator' => 'EXISTS',
+                ],
+            ],
+        ]));
+
+        if (!$tiene_categorizado) {
+            return [
+                'caso'    => 'categoria',
+                'leyenda' => __('Ingresaste movimientos, pero todavía no categorizaste ninguno.', 'egc'),
+                'url'     => add_query_arg('categoria_filtro', '0', LibroManagement::get_instance()->url_mantenimiento()),
+                'boton'   => __('Ir a Mantenimiento', 'egc'),
+            ];
+        }
+
+        return null;
     }
 
     /**
