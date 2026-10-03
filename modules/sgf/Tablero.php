@@ -171,6 +171,20 @@ class Tablero
 
         $monedas_disponibles = $this->monedas_con_billetera($user_id);
 
+        // Subconjunto de $monedas_disponibles con actividad categorizada
+        // real (ver moneda_tiene_actividad_categorizada()): más estricto
+        // que "tiene billetera", así que siempre es un subconjunto, y
+        // conserva el mismo orden (local primero) porque se recorre en
+        // ese orden. Gobierna Serie mensual, los 2 Pareto y el
+        // Comparativo interanual — el Saldo por moneda sigue usando
+        // $monedas_disponibles tal cual.
+        $monedas_con_graficos = array_values(array_filter(
+            $monedas_disponibles,
+            function ($moneda_id) use ($user_id) {
+                return $this->moneda_tiene_actividad_categorizada($user_id, $moneda_id);
+            }
+        ));
+
         $año_comparativo = PresupuestoManagement::get_instance()->año_seleccionado();
         $mes_comparativo = PresupuestoManagement::get_instance()->mes_seleccionado($año_comparativo);
 
@@ -190,8 +204,8 @@ class Tablero
             'billetera_opciones'        => LibroManagement::get_instance()->billetera_opciones_propias($user_id),
             'categoria_opciones_filtro' => LibroManagement::get_instance()->categoria_opciones_filtro($user_id),
             'saldo_por_moneda'          => $this->saldo_por_moneda($user_id, $filtros['billetera_id'], $monedas_disponibles),
-            'serie_mensual'             => $this->serie_mensual($clasificados['serie'], $meses, $monedas_disponibles),
-            'paretos'                   => $this->paretos($clasificados['pareto'], $monedas_disponibles),
+            'serie_mensual'             => $this->serie_mensual($clasificados['serie'], $meses, $monedas_con_graficos),
+            'paretos'                   => $this->paretos($clasificados['pareto'], $monedas_con_graficos),
             'sin_categorizar'           => [
                 'cantidad'   => $clasificados['sin_categorizar']['cantidad'],
                 'monto_neto' => round($clasificados['sin_categorizar']['monto_neto'], 2),
@@ -208,7 +222,7 @@ class Tablero
             'interanual_mes_opciones'     => $mes_max_interanual !== null ? $this->mes_opciones_interanual($mes_max_interanual) : [],
             'interanual_mes_seleccionado' => $mes_interanual,
             'interanual_waterfall'        => $mes_interanual !== null
-                ? $this->waterfall_interanual($user_id, $año_actual_interanual, $año_anterior_interanual, $mes_interanual, $monedas_disponibles)
+                ? $this->waterfall_interanual($user_id, $año_actual_interanual, $año_anterior_interanual, $mes_interanual, $monedas_con_graficos)
                 : [],
         ];
     }
@@ -338,26 +352,24 @@ class Tablero
      * filtro solo acota qué movimientos se cuentan; esto decide si la
      * columna entera de una moneda debe existir en la pantalla).
      *
-     * Edwin fue explícito: cuando no tiene ninguna billetera en una
-     * moneda, esa columna se oculta del todo en las secciones de
-     * gráficos (saldo, línea mensual, los 4 Pareto) en vez de
-     * mostrarse vacía en cero — ver saldo_por_moneda(), serie_mensual()
-     * y paretos(), las tres reciben este resultado. El Comparativo
-     * queda deliberadamente afuera de esta regla (Edwin: "esto aplica
-     * únicamente para los gráficos, el presupuesto queda igual") y
-     * sigue iterando las dos monedas siempre — ver comparativo(), que
-     * no llama a este método.
+     * Esto es lo único que decide si se muestra o se oculta el Saldo
+     * por moneda (ver saldo_por_moneda()): sin ninguna billetera en una
+     * moneda, esa tarjeta de saldo se oculta del todo; con al menos
+     * una billetera, el saldo se muestra aunque sea $0.00 (billetera
+     * sin movimientos todavía) — Edwin fue explícito en esta
+     * distinción. Para las demás secciones de gráficos (línea mensual,
+     * los 4 Pareto, Comparativo interanual) el criterio de ocultamiento
+     * es otro, más estricto — ver moneda_tiene_actividad_categorizada().
+     * El Comparativo real vs. presupuestado tiene, a su vez, su propia
+     * regla independiente de ambos — ver comparativo_real().
      *
-     * El ORDEN del resultado es fijo — Moneda Extranjera primero,
-     * Moneda Local después — nunca el orden en que get_posts() haya
-     * devuelto las billeteras (eso, además de no tener ningún criterio
-     * declarado, es lo que hacía que la columna de moneda extranjera
-     * apareciera a veces a la derecha y a veces a la izquierda): Edwin
-     * pidió explícito que, cuando hay las dos, la extranjera se vea
-     * siempre a la izquierda. Por eso este método arma primero el
-     * CONJUNTO de monedas presentes ($presentes, sin importar el
-     * orden de la consulta) y recién después lo recorre en el orden
-     * fijo que define el resultado.
+     * El ORDEN del resultado es fijo — Moneda Local primero, Moneda
+     * Extranjera después — nunca el orden en que get_posts() haya
+     * devuelto las billeteras: Edwin pidió explícito que, cuando hay
+     * las dos, la local se vea siempre primero. Por eso este método
+     * arma primero el CONJUNTO de monedas presentes ($presentes, sin
+     * importar el orden de la consulta) y recién después lo recorre en
+     * el orden fijo que define el resultado.
      *
      * @return array<int,int>
      */
@@ -382,13 +394,100 @@ class Tablero
         }
 
         $monedas = [];
-        foreach ([Billetera::MONEDA_EXTRANJERA, Billetera::MONEDA_LOCAL] as $moneda_id) {
+        foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
             if (isset($presentes[$moneda_id])) {
                 $monedas[] = $moneda_id;
             }
         }
 
         return $monedas;
+    }
+
+    /**
+     * true si $user_id tiene, en alguna billetera propia de $moneda_id,
+     * AL MENOS UN movimiento que cuente para un gráfico — mismo
+     * criterio de inclusión que clasificar() (categorizado y de tipo
+     * Ingresos o Egresos y Gastos; Transferencias y sin categorizar NO
+     * cuentan, ver su docblock) pero sin pasar por movimientos_filtrados():
+     * esto es deliberadamente de "toda la vida", nunca acotado por el
+     * filtro principal del panel ni por su rango de fecha — Edwin fue
+     * explícito en que el ocultamiento de una columna es estructural,
+     * no depende de qué esté filtrado en un momento dado.
+     *
+     * Gobierna el ocultamiento de la Serie mensual, los 2 Pareto y el
+     * Comparativo interanual (ver view_state(), que arma
+     * $monedas_con_graficos llamando esto por cada moneda de
+     * monedas_con_billetera()) — a diferencia del Saldo por moneda, que
+     * se muestra con solo tener la billetera, aunque esté en cero (ver
+     * monedas_con_billetera()). El Comparativo real vs. presupuestado
+     * no usa este método: tiene su propia regla, ya resuelta por
+     * comparativo_real() para el Año/Mes puntual de su propio selector
+     * (ver su docblock).
+     *
+     * La consulta de existencia usa post_parent__in sobre las
+     * billeteras propias de esa moneda (mismo vínculo nativo
+     * Libro→Billetera que ya usa clasificar()) y corta en el primer
+     * movimiento que resuelva a un tipo válido — no hace falta traer ni
+     * clasificar la lista completa para esto.
+     */
+    private function moneda_tiene_actividad_categorizada($user_id, $moneda_id)
+    {
+        $billeteras_ids = get_posts([
+            'post_type'      => Billetera::POST_TYPE,
+            'author'         => $user_id,
+            'post_status'    => ['publish', 'pending'],
+            'posts_per_page' => -1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+            'meta_query'     => [
+                [
+                    'key'   => '_moneda',
+                    'value' => $moneda_id,
+                ],
+            ],
+        ]);
+
+        if (empty($billeteras_ids)) {
+            return false;
+        }
+
+        $movimientos_ids = get_posts([
+            'post_type'       => Libro::POST_TYPE,
+            'author'          => $user_id,
+            'post_parent__in' => $billeteras_ids,
+            'post_status'     => 'publish',
+            'posts_per_page'  => -1,
+            'no_found_rows'   => true,
+            'fields'          => 'ids',
+            'tax_query'       => [
+                [
+                    'taxonomy' => Categoria::TAXONOMY,
+                    'operator' => 'EXISTS',
+                ],
+            ],
+        ]);
+
+        if (empty($movimientos_ids)) {
+            return false;
+        }
+
+        $categoria = Categoria::get_instance();
+
+        foreach ($movimientos_ids as $movimiento_id) {
+            $terminos = get_the_terms($movimiento_id, Categoria::TAXONOMY);
+            $term_id  = (!empty($terminos) && !is_wp_error($terminos)) ? (int) $terminos[0]->term_id : 0;
+
+            if (!$term_id) {
+                continue;
+            }
+
+            $tipo = $categoria->tipo_de($term_id);
+            if ($tipo && $tipo->name !== 'Transferencias') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -947,7 +1046,17 @@ class Tablero
         $resultado = [];
 
         foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
-            $reporte_real   = $real[$moneda_id] ?? ['categorias' => [], 'diferencia' => 0.0];
+            // Sin entrada en $real: comparativo_real() no encontró ni un
+            // movimiento categorizado (no-Transferencia) de esta moneda
+            // para $año/$mes — se omite la moneda entera del resultado
+            // (título, waterfall y tabla juntos, ver la vista), en vez
+            // de mostrarla vacía con el presupuesto solo. Edwin lo pidió
+            // explícito para esta sección.
+            if (!isset($real[$moneda_id])) {
+                continue;
+            }
+
+            $reporte_real   = $real[$moneda_id];
             $reporte_presup = $presupuestado[$moneda_id] ?? ['grupos' => [], 'diferencia' => 0.0];
 
             // categoria_id => {nombre, real, presupuestado} — arranca
@@ -1265,7 +1374,15 @@ class Tablero
         $resultado = [];
 
         foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
-            $reporte_real   = $real[$moneda_id] ?? ['categorias' => [], 'diferencia' => 0.0];
+            // Misma omisión que comparativo(): sin movimientos
+            // categorizados (no-Transferencia) para $año/$mes, la
+            // moneda no entra en $resultado — waterfall_presupuesto()
+            // la propaga, dejando afuera también su waterfall.
+            if (!isset($real[$moneda_id])) {
+                continue;
+            }
+
+            $reporte_real   = $real[$moneda_id];
             $reporte_presup = $presupuestado[$moneda_id] ?? ['grupos' => [], 'diferencia' => 0.0];
 
             $categorias = [];
@@ -1435,12 +1552,17 @@ class Tablero
         $resultado = [];
 
         foreach ([Billetera::MONEDA_LOCAL, Billetera::MONEDA_EXTRANJERA] as $moneda_id) {
-            $reporte = $variaciones[$moneda_id] ?? [
-                'presupuestado_total' => 0.0,
-                'real_total'          => 0.0,
-                'tiene_presupuesto'   => false,
-                'categorias'          => [],
-            ];
+            // variacion_por_categoria() ya no trae esta moneda cuando
+            // comparativo_real() no encontró movimientos categorizados
+            // (no-Transferencia) para $año/$mes — se omite entera acá
+            // también, en vez de caer al placeholder "sin presupuesto"
+            // (que es un caso distinto: sí hay actividad real, pero
+            // nada presupuestado).
+            if (!isset($variaciones[$moneda_id])) {
+                continue;
+            }
+
+            $reporte = $variaciones[$moneda_id];
 
             if (!$reporte['tiene_presupuesto']) {
                 $resultado[$moneda_id] = [

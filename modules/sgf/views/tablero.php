@@ -38,18 +38,35 @@ if (!defined('ABSPATH')) {
  * suelto en el propio `<canvas>`, que solo fija la resolución inicial
  * y no alcanza para contener el resize responsivo.
  *
- * $monedas_disponibles_cantidad decide, únicamente en las secciones de
- * gráficos (saldo, línea mensual, los 4 Pareto), si se centra una
- * columna sola en vez de mostrar dos — Tablero::monedas_con_billetera()
- * ya filtró $state['saldo_por_moneda']/['serie_mensual']/['paretos']
- * a solo las monedas en las que el usuario tiene al menos una
- * billetera, así que cuando este número da 1 estas tres secciones
- * traen una sola entrada y esta vista solo decide CÓMO se acomoda esa
- * entrada (clase `mx-auto` para centrar, `col-12` + el modificador
- * `.egc-tablero-chart--ancho` para agrandar el gráfico lineal al ancho
- * completo). El Comparativo queda afuera de esta variable a propósito
- * (Edwin: "esto aplica únicamente para los gráficos, el presupuesto
- * queda igual") — su tabla sigue mostrando siempre las dos monedas.
+ * Dos variables de conteo deciden, cada una en su propia sección, si se
+ * centra una columna sola en vez de mostrar dos — ninguna de las dos
+ * decide texto ni oculta nada por su cuenta: el ocultamiento ya lo
+ * resolvió Tablero::view_state() del lado del servidor (una moneda
+ * ausente de $state simplemente no imprime su `foreach`); acá solo se
+ * decide CÓMO se acomoda lo que SÍ llegó.
+ *
+ * $monedas_disponibles_cantidad (= count($state['saldo_por_moneda']))
+ * es la más laxa: Tablero::monedas_con_billetera() solo exige tener al
+ * menos una billetera en esa moneda, billetera sin movimientos
+ * incluida (Edwin: "si las hay y no tiene movimiento, se debe mostrar
+ * cero") — gobierna únicamente el Saldo por moneda.
+ *
+ * $monedas_con_graficos_cantidad (= count($state['serie_mensual']), que
+ * trae las mismas claves que $state['paretos']['ingresos'/'egresos']:
+ * las tres vienen de Tablero::view_state() filtradas por el mismo
+ * $monedas_con_graficos) es más estricta —
+ * Tablero::moneda_tiene_actividad_categorizada() exige además al menos
+ * un movimiento categorizado (no-Transferencia) — y gobierna la Serie
+ * mensual y los 2 Pareto: `mx-auto` para centrar los pie (Pareto, que
+ * mantienen su tamaño propio), `col-12` + el modificador
+ * `.egc-tablero-chart--ancho` para que la línea (Serie mensual) ocupe
+ * todo el ancho disponible cuando la otra moneda está oculta.
+ *
+ * El Comparativo real vs. presupuestado no usa ninguna de las dos: su
+ * propio ocultamiento por moneda ya viene resuelto en
+ * Tablero::comparativo_real() para el Año/Mes puntual de su selector
+ * (ver el docblock de Tablero::comparativo()) — su `foreach` más abajo
+ * ya no imprime una moneda sin datos, sin necesitar ningún conteo acá.
  *
  * El waterfall del Requisito B ($state['waterfall_presupuesto'], un
  * canvas por moneda) se imprime DENTRO del mismo `foreach` que ya
@@ -67,13 +84,14 @@ if (!defined('ABSPATH')) {
  * en todo el historial) esta sección solo imprime su título, ni
  * siquiera el <select> — no hay ningún mes entre el cual elegir.
  *
- * A diferencia del resto del Comparativo, el Comparativo interanual SÍ
- * queda adentro del Requisito A: `$state['interanual_waterfall']` ya
- * viene de Tablero::waterfall_interanual() filtrado por
- * monedas_con_billetera(), así que el `foreach` de más abajo solo
- * recorre las monedas en las que el usuario tiene billetera — sin
- * billetera en una moneda, ni su título ni su gráfico aparecen acá
- * (Edwin lo pidió explícito para esta sección en particular).
+ * A diferencia del Comparativo real vs. presupuestado, el Comparativo
+ * interanual SÍ queda adentro de la misma regla que la Serie mensual y
+ * los 2 Pareto: `$state['interanual_waterfall']` ya viene de
+ * Tablero::waterfall_interanual() filtrado por $monedas_con_graficos
+ * (ver Tablero::view_state()), así que el `foreach` de más abajo solo
+ * recorre las monedas con actividad categorizada real — sin ella, ni
+ * su título ni su gráfico aparecen acá (Edwin lo pidió explícito para
+ * esta sección en particular).
  */
 $manager = Tablero::get_instance();
 $state   = $manager->view_state();
@@ -98,7 +116,8 @@ $datos_grafico = [
     'waterfall_interanual'   => $state['interanual_waterfall'],
 ];
 
-$monedas_disponibles_cantidad = count($state['saldo_por_moneda']);
+$monedas_disponibles_cantidad  = count($state['saldo_por_moneda']);
+$monedas_con_graficos_cantidad = count($state['serie_mensual']);
 ?>
 <div class="container py-5">
     <h1 class="h3 mb-4"><?php esc_html_e('Tablero', 'egc'); ?></h1>
@@ -251,7 +270,7 @@ $monedas_disponibles_cantidad = count($state['saldo_por_moneda']);
 
     <div class="row g-4 mb-4">
         <?php foreach ($state['serie_mensual'] as $moneda_id => $serie) : ?>
-            <div class="<?php echo $monedas_disponibles_cantidad === 1 ? 'col-12' : 'col-lg-6'; ?>">
+            <div class="<?php echo $monedas_con_graficos_cantidad === 1 ? 'col-12' : 'col-lg-6'; ?>">
                 <div class="card h-100">
                     <div class="card-body">
                         <h2 class="h6">
@@ -263,7 +282,7 @@ $monedas_disponibles_cantidad = count($state['saldo_por_moneda']);
                             );
                             ?>
                         </h2>
-                        <div class="egc-tablero-chart<?php echo $monedas_disponibles_cantidad === 1 ? ' egc-tablero-chart--ancho' : ''; ?>">
+                        <div class="egc-tablero-chart<?php echo $monedas_con_graficos_cantidad === 1 ? ' egc-tablero-chart--ancho' : ''; ?>">
                             <canvas id="egc-tablero-linea-<?php echo esc_attr($moneda_id); ?>"></canvas>
                         </div>
                     </div>
@@ -277,7 +296,7 @@ $monedas_disponibles_cantidad = count($state['saldo_por_moneda']);
             <h2 class="h5"><?php esc_html_e('Pareto de Ingresos', 'egc'); ?></h2>
         </div>
         <?php foreach ($state['paretos']['ingresos'] as $moneda_id => $pareto) : ?>
-            <div class="col-lg-6<?php echo $monedas_disponibles_cantidad === 1 ? ' mx-auto' : ''; ?>">
+            <div class="col-lg-6<?php echo $monedas_con_graficos_cantidad === 1 ? ' mx-auto' : ''; ?>">
                 <div class="card h-100">
                     <div class="card-body">
                         <h3 class="h6 text-muted"><?php echo esc_html($pareto['etiqueta']); ?></h3>
@@ -299,7 +318,7 @@ $monedas_disponibles_cantidad = count($state['saldo_por_moneda']);
             <h2 class="h5"><?php esc_html_e('Pareto de Egresos y Gastos', 'egc'); ?></h2>
         </div>
         <?php foreach ($state['paretos']['egresos'] as $moneda_id => $pareto) : ?>
-            <div class="col-lg-6<?php echo $monedas_disponibles_cantidad === 1 ? ' mx-auto' : ''; ?>">
+            <div class="col-lg-6<?php echo $monedas_con_graficos_cantidad === 1 ? ' mx-auto' : ''; ?>">
                 <div class="card h-100">
                     <div class="card-body">
                         <h3 class="h6 text-muted"><?php echo esc_html($pareto['etiqueta']); ?></h3>
