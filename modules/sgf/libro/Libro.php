@@ -41,12 +41,39 @@ if (!defined('ABSPATH')) {
  * su `view_state()`, sus handlers de `admin-post.php` — va en
  * `LibroManagement`, misma separación de razones de cambio que ya
  * existe entre `Billetera` y `BilleteraManagement`.
+ *
+ * También es la regla "un movimiento no sobrevive a su billetera":
+ * WordPress no propaga la papelera ni el borrado a los posts hijos
+ * (`post_parent`) de un post no jerárquico, así que sin esto, borrar
+ * una billetera dejaba sus movimientos publicados — apareciendo en el
+ * Tablero y, al vaciarse la papelera, huérfanos con un `post_parent`
+ * inexistente. Vive acá y no en `Billetera` porque la dependencia va
+ * de Libro hacia Billetera (el movimiento es el hijo), nunca al revés:
+ * ver `enviar_movimientos_a_papelera()`, `restaurar_movimientos()` y
+ * `eliminar_movimientos()`.
  */
 class Libro
 {
     use Singleton;
 
     const POST_TYPE = 'libro';
+
+    /**
+     * Marca (valor: ID de la billetera) que se pone en cada movimiento
+     * que se fue a la papelera ARRASTRADO por su billetera — es lo que
+     * permite que restaurar la billetera devuelva solo esos, y no
+     * resucite los que el dueño ya había eliminado a mano antes.
+     */
+    const META_PAPELERA_CON_BILLETERA = '_egc_papelera_con_billetera';
+
+    /**
+     * true mientras una cascada de billetera está recorriendo sus
+     * movimientos: recalcular_saldo_billetera() la respeta y no recalcula
+     * en cada movimiento (el saldo de una billetera que se está
+     * mandando a la papelera o eliminando no le importa a nadie, y al
+     * restaurar se recalcula una sola vez al final).
+     */
+    private $en_cascada = false;
 
     private function __construct()
     {
@@ -58,6 +85,9 @@ class Libro
         add_action('trashed_post', [$this, 'recalcular_saldo_billetera']);
         add_action('untrashed_post', [$this, 'recalcular_saldo_billetera']);
         add_action('before_delete_post', [$this, 'recalcular_saldo_billetera']);
+        add_action('trashed_post', [$this, 'enviar_movimientos_a_papelera']);
+        add_action('untrashed_post', [$this, 'restaurar_movimientos']);
+        add_action('before_delete_post', [$this, 'eliminar_movimientos']);
         add_filter('wp_insert_post_data', [$this, 'forzar_billetera_y_autor'], 10, 2);
     }
 
@@ -407,7 +437,7 @@ class Libro
      */
     public function recalcular_saldo_billetera($post_id)
     {
-        if (get_post_type($post_id) !== self::POST_TYPE) {
+        if ($this->en_cascada || get_post_type($post_id) !== self::POST_TYPE) {
             return;
         }
 
@@ -417,6 +447,136 @@ class Libro
         }
 
         $this->recalcular_saldo_de($post->post_parent);
+    }
+
+    /**
+     * Cuando una billetera va a la papelera, sus movimientos van con
+     * ella. Usa `wp_trash_post()` (no un borrado) para que sean
+     * recuperables, igual que la billetera — y cada movimiento queda
+     * marcado con META_PAPELERA_CON_BILLETERA para que restaurar la
+     * billetera devuelva solo estos (ver restaurar_movimientos()).
+     *
+     * `trashed_post` dispara para cualquier post_type: el primer
+     * chequeo descarta todo lo que no sea una billetera (incluidos los
+     * propios movimientos que esta cascada manda a la papelera).
+     * Solo recorre los movimientos que todavía no están en la papelera:
+     * los que el dueño ya había eliminado antes no se tocan.
+     */
+    public function enviar_movimientos_a_papelera($post_id)
+    {
+        if (get_post_type($post_id) !== Billetera::POST_TYPE) {
+            return;
+        }
+
+        $this->en_cascada = true;
+
+        foreach ($this->movimientos_de($post_id, ['publish', 'pending', 'draft', 'private', 'future']) as $movimiento_id) {
+            wp_trash_post($movimiento_id);
+
+            // Con EMPTY_TRASH_DAYS = 0, wp_trash_post() elimina en vez
+            // de mandar a la papelera: no hay nada que marcar.
+            if (get_post_status($movimiento_id) === 'trash') {
+                update_post_meta($movimiento_id, self::META_PAPELERA_CON_BILLETERA, (int) $post_id);
+            }
+        }
+
+        $this->en_cascada = false;
+    }
+
+    /**
+     * Inverso de enviar_movimientos_a_papelera(): al restaurar una
+     * billetera, vuelven SOLO los movimientos que se fueron con ella
+     * (los marcados con su ID), no los que el dueño había eliminado a
+     * mano por su cuenta.
+     *
+     * `wp_untrash_post()` deja por defecto todo post restaurado como
+     * borrador (`draft`); el filtro nativo `wp_untrash_post_status`
+     * (WordPress 5.6+) permite devolverle el estatus que tenía antes de
+     * la papelera, que es lo que necesita un movimiento: solo los
+     * `publish` cuentan para el saldo y el Tablero. El filtro se
+     * agrega y se quita alrededor de la cascada para no alterar ningún
+     * otro restaurado.
+     *
+     * Como durante la cascada no se recalcula el saldo (ver
+     * $en_cascada), se hace una sola vez al final.
+     */
+    public function restaurar_movimientos($post_id)
+    {
+        if (get_post_type($post_id) !== Billetera::POST_TYPE) {
+            return;
+        }
+
+        $conservar_estatus = function ($nuevo_estatus, $movimiento_id, $estatus_previo) {
+            return $estatus_previo ? $estatus_previo : $nuevo_estatus;
+        };
+
+        add_filter('wp_untrash_post_status', $conservar_estatus, 10, 3);
+        $this->en_cascada = true;
+
+        $movimientos_ids = get_posts([
+            'post_type'      => self::POST_TYPE,
+            'post_parent'    => $post_id,
+            'post_status'    => 'trash',
+            'posts_per_page' => -1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+            'meta_key'       => self::META_PAPELERA_CON_BILLETERA,
+            'meta_value'     => (int) $post_id,
+        ]);
+
+        foreach ($movimientos_ids as $movimiento_id) {
+            wp_untrash_post($movimiento_id);
+            delete_post_meta($movimiento_id, self::META_PAPELERA_CON_BILLETERA);
+        }
+
+        $this->en_cascada = false;
+        remove_filter('wp_untrash_post_status', $conservar_estatus, 10);
+
+        $this->recalcular_saldo_de($post_id);
+    }
+
+    /**
+     * Cuando una billetera se elimina en forma permanente (a mano desde
+     * wp-admin, o sola: WordPress vacía la papelera a los 30 días),
+     * se eliminan también TODOS sus movimientos, estén donde estén —
+     * publicados o ya en la papelera. `before_delete_post` dispara
+     * mientras la billetera todavía existe, así que es el último
+     * momento en que se pueden encontrar por su `post_parent`; después
+     * quedarían huérfanos (WordPress solo reasigna hijos en post types
+     * jerárquicos, y Billetera no lo es).
+     */
+    public function eliminar_movimientos($post_id)
+    {
+        if (get_post_type($post_id) !== Billetera::POST_TYPE) {
+            return;
+        }
+
+        $this->en_cascada = true;
+
+        foreach ($this->movimientos_de($post_id, ['publish', 'pending', 'draft', 'private', 'future', 'trash']) as $movimiento_id) {
+            wp_delete_post($movimiento_id, true);
+        }
+
+        $this->en_cascada = false;
+    }
+
+    /**
+     * IDs de los movimientos de una billetera con alguno de los
+     * estatus indicados — compartido por las cascadas de arriba.
+     *
+     * @param string[] $estatus
+     * @return int[]
+     */
+    private function movimientos_de($billetera_id, $estatus)
+    {
+        return get_posts([
+            'post_type'      => self::POST_TYPE,
+            'post_parent'    => $billetera_id,
+            'post_status'    => $estatus,
+            'posts_per_page' => -1,
+            'no_found_rows'  => true,
+            'fields'         => 'ids',
+        ]);
     }
 
     /**

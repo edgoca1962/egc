@@ -42,7 +42,8 @@ if (!defined('ABSPATH')) {
  *
  * Cinco de sus seis secciones dependen del filtro principal (el mismo
  * de Mantenimiento, con una única regla propia: sin ningún rango de
- * fecha puesto, se asume "últimos 12 meses" — ver filtros_panel()); la
+ * fecha puesto, se asume una ventana de 12 meses que termina al final
+ * del mes del movimiento más reciente — ver filtros_panel()); la
  * sexta, el Comparativo, es deliberadamente independiente (Edwin fue
  * explícito: "el comparativo no hereda el filtro") y tiene su propio
  * selector de Año/Mes, reusando el mismo de Presupuesto.
@@ -163,7 +164,7 @@ class Tablero
     public function view_state()
     {
         $user_id = get_current_user_id();
-        $filtros = $this->filtros_panel();
+        $filtros = $this->filtros_panel($user_id);
 
         $movimientos  = $this->movimientos_filtrados($filtros, $user_id);
         $clasificados = $this->clasificar($movimientos);
@@ -600,28 +601,80 @@ class Tablero
      * Misma normalización que Mantenimiento de movimientos
      * (LibroManagement::normalizar_filtros(), ahora público), más una
      * regla de default que solo tiene sentido ACÁ: sin ningún rango de
-     * fecha puesto, se asume "últimos 12 meses" (Edwin lo confirmó
-     * explícito) — un tablero sin ningún recorte de fecha no puede
-     * quedar agregando TODA la historia de una, a diferencia de
+     * fecha puesto, se asume una ventana de 12 meses (Edwin lo
+     * confirmó explícito) — un tablero sin ningún recorte de fecha no
+     * puede quedar agregando TODA la historia de una, a diferencia de
      * Mantenimiento, donde "sin filtro" (ver todo, para categorizar en
      * bloque) sí es un estado de partida válido y buscado.
      *
+     * La ventana ya no termina HOY sino al FINAL DEL MES del movimiento
+     * más reciente (ver fecha_ultimo_movimiento()), y arranca el día 1
+     * del mes 11 meses antes de ese — así el default siempre abarca los
+     * 12 meses calendario que terminan en el último mes con
+     * información, igual que ya hace el Comparativo interanual (ver
+     * ultimo_periodo_con_datos()). Sin ningún movimiento todavía, cae
+     * al criterio anterior: el mes de calendario en curso.
+     *
+     * Solo aplica cuando NO hay ningún rango puesto: si la persona
+     * eligió un desde y/o un hasta, se respeta tal cual.
+     *
      * @return array{billetera_id:int, fecha_desde:string, fecha_hasta:string, monto_desde:string, monto_hasta:string, categoria_filtro:string, texto:string}
      */
-    private function filtros_panel()
+    private function filtros_panel($user_id)
     {
         $filtros = LibroManagement::get_instance()->normalizar_filtros($_GET);
 
         if ($filtros['fecha_desde'] === '' && $filtros['fecha_hasta'] === '') {
-            $filtros['fecha_hasta'] = gmdate('Y-m-d');
+            $ancla = new \DateTime($this->fecha_ultimo_movimiento($user_id) ?? gmdate('Y-m-d'));
 
-            $desde = new \DateTime($filtros['fecha_hasta']);
-            $desde->modify('-11 months');
+            // "first day of this month" ANTES de restar meses: restar
+            // desde un día 29-31 puede desbordar al mes siguiente
+            // (31 de marzo menos 11 meses no existe en abril).
+            $desde = clone $ancla;
             $desde->modify('first day of this month');
+            $desde->modify('-11 months');
+
+            $hasta = clone $ancla;
+            $hasta->modify('last day of this month');
+
             $filtros['fecha_desde'] = $desde->format('Y-m-d');
+            $filtros['fecha_hasta'] = $hasta->format('Y-m-d');
         }
 
         return $filtros;
+    }
+
+    /**
+     * Fecha ('Y-m-d') del movimiento publicado más reciente de
+     * $user_id, de CUALQUIER billetera y cualquier categorización
+     * (incluidos los sin categorizar y las Transferencias): a
+     * diferencia de ultimo_periodo_con_datos(), que ancla un acumulado
+     * real y por eso exige que cuente como ingreso o egreso, acá solo
+     * se necesita "hasta dónde llega lo cargado" para ubicar la ventana
+     * del filtro — un movimiento reciente sin categorizar tiene que
+     * quedar adentro de ella, porque es justo el que alimenta el aviso
+     * de sin categorizar.
+     *
+     * @return string|null null si todavía no tiene ningún movimiento.
+     */
+    private function fecha_ultimo_movimiento($user_id)
+    {
+        $ids = get_posts([
+            'post_type'      => Libro::POST_TYPE,
+            'post_status'    => 'publish',
+            'author'         => $user_id,
+            'posts_per_page' => 1,
+            'no_found_rows'  => true,
+            'orderby'        => 'date',
+            'order'          => 'DESC',
+            'fields'         => 'ids',
+        ]);
+
+        if (empty($ids)) {
+            return null;
+        }
+
+        return substr(get_post_field('post_date', $ids[0]), 0, 10);
     }
 
     /**

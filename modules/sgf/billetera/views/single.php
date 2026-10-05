@@ -75,8 +75,49 @@ $back_url      = $manager->back_url();
         $movimientos = $resultado['filas'];
         ?>
 
+        <?php
+        // Sin movimientos y sin filtro puesto no hay nada que filtrar:
+        // el formulario solo aparece cuando hay filas o cuando ya hay
+        // un filtro aplicado (para poder cambiarlo o vaciarlo).
+        ?>
+        <?php if (!empty($movimientos) || $resultado['filtrado']) : ?>
+            <form method="get" class="row g-3 align-items-end mb-4">
+                <?php
+                // Mismos campos que Mantenimiento y el Tablero, sin el
+                // select de billetera (no se define $billetera_opciones
+                // a propósito): la billetera es esta misma página. Ver
+                // el docblock del partial.
+                $filtros                   = $resultado['filtros'];
+                $categoria_opciones_filtro = $resultado['categoria_opciones_filtro'];
+                include EGC_DIR . '/modules/sgf/views/partials/movimientos-filtro-campos.php';
+                ?>
+
+                <?php
+                // Un <form method="get"> reemplaza TODA la querystring
+                // al enviarse: sin este campo oculto se perdería el
+                // ?volver= del botón "Regresar".
+                ?>
+                <input type="hidden" name="volver" value="<?php echo esc_attr($back_url); ?>">
+
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-outline-secondary">
+                        <i class="bi bi-funnel" aria-hidden="true"></i>
+                        <?php esc_html_e('Filtrar', 'egc'); ?>
+                    </button>
+                </div>
+            </form>
+        <?php endif; ?>
+
         <?php if (empty($movimientos)) : ?>
-            <p class="text-muted"><?php esc_html_e('Todavía no hay movimientos.', 'egc'); ?></p>
+            <p class="text-muted">
+                <?php
+                echo esc_html(
+                    $resultado['filtrado']
+                        ? __('No hay movimientos que coincidan con esos filtros.', 'egc')
+                        : __('Todavía no hay movimientos.', 'egc')
+                );
+                ?>
+            </p>
         <?php else : ?>
             <p class="text-muted">
                 <?php

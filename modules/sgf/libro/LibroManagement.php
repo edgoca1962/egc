@@ -386,22 +386,44 @@ class LibroManagement
      * para pintar "Mostrando X–Y de Z" y los controles de paginación,
      * igual que en movimientos_filtrados().
      *
-     * @return array{filas:array<int,array>, total:int, paginas:int, paged:int}
+     * Acepta los mismos filtros que Mantenimiento y el Tablero (fechas,
+     * montos, categorización, texto — ver normalizar_filtros()), leídos
+     * de la URL, SIN el de billetera: la billetera es la propia página.
+     * Reusa construir_args_filtro() tal cual (cuarto llamador real), con
+     * dos precisiones propias de este listado:
+     *
+     * - El "usuario" que se le pasa es el DUEÑO de la billetera, no
+     *   quien mira: el single también lo puede abrir quien administra
+     *   el recurso (ver guard_single()), y las categorías contra las
+     *   que se valida el filtro son las del dueño. Como el post_author
+     *   de un movimiento siempre es el dueño de su billetera (ver
+     *   Libro::forzar_billetera_y_autor()), el `author` que arma esa
+     *   función sigue siendo correcto.
+     * - Sin ningún filtro puesto se listan TODOS los movimientos de la
+     *   billetera, como siempre (a diferencia del Tablero, no hay un
+     *   rango de fecha por defecto: un libro de movimientos se espera
+     *   completo).
+     *
+     * @return array{
+     *   filas:array<int,array>, total:int, paginas:int, paged:int,
+     *   filtros:array, filtrado:bool, categoria_opciones_filtro:array,
+     * }
      */
     public function movimientos_de($billetera_id)
     {
-        $paged = isset($_GET[self::QUERY_VAR_PAGED]) ? max(1, absint($_GET[self::QUERY_VAR_PAGED])) : 1;
+        $paged    = isset($_GET[self::QUERY_VAR_PAGED]) ? max(1, absint($_GET[self::QUERY_VAR_PAGED])) : 1;
+        $dueño_id = (int) get_post_field('post_author', $billetera_id);
 
-        $query = new WP_Query([
-            'post_type'      => Libro::POST_TYPE,
-            'post_parent'    => $billetera_id,
-            'post_status'    => 'publish',
-            'orderby'        => 'date',
-            'order'          => 'DESC',
-            'posts_per_page' => self::MOVIMIENTOS_POR_PAGINA,
-            'paged'          => $paged,
-            'no_found_rows'  => false,
-        ]);
+        $filtros                 = $this->normalizar_filtros($_GET);
+        $filtros['billetera_id'] = (int) $billetera_id;
+
+        $args = $this->construir_args_filtro($filtros, $dueño_id);
+
+        $args['posts_per_page'] = self::MOVIMIENTOS_POR_PAGINA;
+        $args['paged']          = $paged;
+        $args['no_found_rows']  = false;
+
+        $query = new WP_Query($args);
 
         $filas = [];
         foreach ($query->posts as $movimiento) {
@@ -415,11 +437,25 @@ class LibroManagement
             ];
         }
 
+        // La vista distingue "esta billetera todavía no tiene
+        // movimientos" de "ninguno coincide con el filtro" (y decide si
+        // vale la pena pintar el formulario) mirando este booleano, en
+        // vez de revisar cada campo ella misma.
+        $filtrado = $filtros['fecha_desde'] !== ''
+            || $filtros['fecha_hasta'] !== ''
+            || $filtros['monto_desde'] !== ''
+            || $filtros['monto_hasta'] !== ''
+            || $filtros['categoria_filtro'] !== ''
+            || $filtros['texto'] !== '';
+
         return [
-            'filas'   => $filas,
-            'total'   => (int) $query->found_posts,
-            'paginas' => (int) $query->max_num_pages,
-            'paged'   => $paged,
+            'filas'                     => $filas,
+            'total'                     => (int) $query->found_posts,
+            'paginas'                   => (int) $query->max_num_pages,
+            'paged'                     => $paged,
+            'filtros'                   => $filtros,
+            'filtrado'                  => $filtrado,
+            'categoria_opciones_filtro' => $this->categoria_opciones_filtro($dueño_id),
         ];
     }
 
