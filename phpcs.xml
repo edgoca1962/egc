@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<ruleset name="EGC">
+    <description>WordPress Coding Standards para el tema EGC.</description>
+
+    <file>.</file>
+    <exclude-pattern>*/node_modules/*</exclude-pattern>
+    <exclude-pattern>*/dist/*</exclude-pattern>
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+
+    <arg name="extensions" value="php"/>
+    <arg name="colors"/>
+    <arg value="ps"/>
+
+    <rule ref="WordPress">
+        <!--
+            Nombres de archivo: el proyecto usa clases con namespace y
+            autoload PSR-4 (Migracion.php -> clase Migracion), no el
+            esquema class-nombre.php de WPCS. Es una decisión
+            deliberada y uniforme; ver functions.php y
+            ModuleLoader::register_autoloading().
+        -->
+        <exclude name="WordPress.Files.FileName"/>
+    </rule>
+
+    <config name="text_domain" value="egc"/>
+
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+        <properties>
+            <property name="prefixes" type="array">
+                <element value="egc"/>
+                <element value="EGC"/>
+            </property>
+        </properties>
+    </rule>
+</ruleset>

@@ -16,12 +16,12 @@ if (!defined('ABSPATH')) {
  *
  * Las clases de un módulo viven bajo el namespace `EGC\Modules\<Nombre>`,
  * por convención igual al nombre de su carpeta con la primera letra en
- * mayúscula (carpeta `blog` -> namespace `EGC\Modules\Blog`). No se usa
- * el autoload PSR-4 de Composer para esto: ese mapeo es estático (haría
- * falta `composer dump-autoload` cada vez que se agrega un módulo,
- * rompiendo la promesa de "agregar una carpeta alcanza"). Se registra
- * en cambio un autoloader propio que resuelve la ruta en tiempo de
- * ejecución a partir de los módulos que discover() encuentra.
+ * mayúscula (carpeta `blog` -> namespace `EGC\Modules\Blog`). No sirve
+ * un mapeo PSR-4 estático para esto (habría que declarar cada módulo
+ * nuevo en algún lado, rompiendo la promesa de "agregar una carpeta
+ * alcanza"). Se registra en cambio un autoloader propio que resuelve la
+ * ruta en tiempo de ejecución a partir del nombre de la clase; el del
+ * Core (`EGC\Core\`) vive en functions.php.
  *
  * Si el módulo tiene un archivo `module.php` (misma convención de
  * nombre que ya usan las vistas: alcanza con crearlo, no hace falta
@@ -101,7 +101,7 @@ class ModuleLoader
     /**
      * Autoload de las clases de módulos: `EGC\Modules\<Nombre>\Clase`
      * -> `modules/<carpeta>/Clase.php`, donde `<carpeta>` es `<Nombre>`
-     * en minúsculas. Dinámico, no PSR-4 de Composer, porque los
+     * en minúsculas. Dinámico, no un mapeo estático, porque los
      * módulos se descubren en tiempo de ejecución (ver docblock de la
      * clase).
      *
