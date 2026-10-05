@@ -9,6 +9,7 @@ use EGC\Modules\Sgf\CategoriaManagement;
 use EGC\Modules\Sgf\Libro\Libro;
 use EGC\Modules\Sgf\Libro\LibroImportacion;
 use EGC\Modules\Sgf\Libro\LibroManagement;
+use EGC\Modules\Sgf\Migracion\MigracionManagement;
 use EGC\Modules\Sgf\Presupuesto\Presupuesto;
 use EGC\Modules\Sgf\Presupuesto\PresupuestoManagement;
 
@@ -40,6 +41,7 @@ LibroImportacion::get_instance();
 Presupuesto::get_instance();
 PresupuestoManagement::get_instance();
 Tablero::get_instance();
+MigracionManagement::get_instance();
 
 /**
  * Sembrado proactivo de las páginas de alta/edición: igual que Blog, no
