@@ -763,7 +763,7 @@ class Categoria
             // "Gestión de usuarios" es la única pantalla donde vive
             // este botón, así que la URL actual YA es la de vuelta —
             // mismo truco que BilleteraManagement::current_url().
-            'redirect_to'      => home_url(add_query_arg(null, null)),
+            'redirect_to'      => home_url(add_query_arg([])),
         ];
     }
 

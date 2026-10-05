@@ -451,6 +451,6 @@ class CategoriaManagement
 
     private function current_url()
     {
-        return home_url(add_query_arg(null, null));
+        return home_url(add_query_arg([]));
     }
 }
