@@ -37,8 +37,10 @@ if (!defined('ABSPATH')) {
  * por qué): el filtro de Mantenimiento de movimientos
  * (normalizar_filtros/construir_args_filtro/billetera_propia/
  * billetera_opciones_propias/categoria_opciones_filtro) y el reporte de
- * Presupuesto (año_seleccionado/mes_seleccionado/año_opciones/
- * mes_opciones/monedas_de).
+ * Presupuesto (año_seleccionado/mes_seleccionado/mes_opciones/
+ * monedas_de). Los años del selector del Comparativo, en cambio, son
+ * propios (ver años_con_movimientos()): el rango fijo de Presupuesto
+ * no alcanza para quien tiene historia de más años.
  *
  * Cinco de sus seis secciones dependen del filtro principal (el mismo
  * de Mantenimiento, con una única regla propia: sin ningún rango de
@@ -212,7 +214,7 @@ class Tablero
                 'monto_neto' => round($clasificados['sin_categorizar']['monto_neto'], 2),
             ],
             'año_comparativo' => $año_comparativo,
-            'año_opciones'    => PresupuestoManagement::get_instance()->año_opciones(),
+            'año_opciones'    => $this->años_con_movimientos($user_id, $año_comparativo),
             'mes_comparativo' => $mes_comparativo,
             'mes_opciones'    => PresupuestoManagement::get_instance()->mes_opciones(),
             'waterfall_presupuesto' => $this->waterfall_presupuesto($user_id, $año_comparativo, $mes_comparativo),
@@ -659,6 +661,19 @@ class Tablero
      */
     private function fecha_ultimo_movimiento($user_id)
     {
+        return $this->fecha_extrema_de_movimientos($user_id, 'DESC');
+    }
+
+    /**
+     * Fecha ('Y-m-d') del movimiento publicado más antiguo ('ASC') o
+     * más reciente ('DESC') de $user_id — la misma consulta para los
+     * dos extremos, así fecha_ultimo_movimiento() y
+     * años_con_movimientos() no repiten el get_posts().
+     *
+     * @return string|null null si todavía no tiene ningún movimiento.
+     */
+    private function fecha_extrema_de_movimientos($user_id, $orden)
+    {
         $ids = get_posts([
             'post_type'      => Libro::POST_TYPE,
             'post_status'    => 'publish',
@@ -666,7 +681,7 @@ class Tablero
             'posts_per_page' => 1,
             'no_found_rows'  => true,
             'orderby'        => 'date',
-            'order'          => 'DESC',
+            'order'          => $orden,
             'fields'         => 'ids',
         ]);
 
@@ -675,6 +690,59 @@ class Tablero
         }
 
         return substr(get_post_field('post_date', $ids[0]), 0, 10);
+    }
+
+    /**
+     * Opciones del <select> de Año del Comparativo: los años en los que
+     * $user_id tiene al menos un movimiento publicado, de CUALQUIERA de
+     * sus billeteras (el post_author de un movimiento es siempre el
+     * dueño de su billetera, ver Libro::forzar_billetera_y_autor()).
+     *
+     * Sin SQL propio: WordPress no trae una función de "años
+     * distintos" para un CPT con autor, y el proyecto no escribe SQL
+     * directo. Se ubican el primer y el último año con dos consultas
+     * de un solo resultado, y se confirma cada año del medio con otra
+     * de un solo resultado (`date_query`, sobre `post_date` local, que
+     * es la fecha que muestra y filtra todo el módulo) — del orden de
+     * (cantidad de años + 2) consultas livianas, sin traer ningún
+     * movimiento completo. Un año del medio sin movimientos no se
+     * ofrece.
+     *
+     * Siempre se incluye $año_seleccionado, aunque no tenga
+     * movimientos (por defecto, el año en curso): si no estuviera, el
+     * <select> mostraría otra opción como elegida mientras el
+     * Comparativo muestra el año de la URL.
+     *
+     * @return array<int,string> año => etiqueta, ascendente.
+     */
+    private function años_con_movimientos($user_id, $año_seleccionado)
+    {
+        $opciones = [];
+        $primera  = $this->fecha_extrema_de_movimientos($user_id, 'ASC');
+        $ultima   = $this->fecha_extrema_de_movimientos($user_id, 'DESC');
+
+        if ($primera !== null && $ultima !== null) {
+            for ($año = (int) substr($primera, 0, 4); $año <= (int) substr($ultima, 0, 4); $año++) {
+                $hay_movimientos = get_posts([
+                    'post_type'      => Libro::POST_TYPE,
+                    'post_status'    => 'publish',
+                    'author'         => $user_id,
+                    'posts_per_page' => 1,
+                    'no_found_rows'  => true,
+                    'fields'         => 'ids',
+                    'date_query'     => [['year' => $año]],
+                ]);
+
+                if (!empty($hay_movimientos)) {
+                    $opciones[$año] = (string) $año;
+                }
+            }
+        }
+
+        $opciones[$año_seleccionado] = (string) $año_seleccionado;
+        ksort($opciones);
+
+        return $opciones;
     }
 
     /**

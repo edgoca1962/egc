@@ -5,7 +5,7 @@ Text Domain: egc
 Author: Edwin González 
 Author URI: https: //fgh-org.org
 Description: Este tema pretende ser un framework para poder implementar diferentes módulos o necesidades de un cliente. Cada módulo podría estar compuesto por uno o varios Custom Posts, páginas, sidebars, menues, etc. En este framework se incluye bootstrap, sweetalert, fontawesome, annimate entre otas dependencias que se pueden ver en el package.json file. 
-Version: 0.1.40
+Version: 0.1.41
 Tested up to: 5.4 
 Requires PHP up to: 8.0 
 License: GNU General Public License v1 or later 
