@@ -55,17 +55,6 @@ $state   = $manager->view_state_listado();
             </select>
         </div>
 
-        <div class="col-auto">
-            <label class="form-label" for="mes"><?php esc_html_e('Acumulado hasta', 'egc'); ?></label>
-            <select class="form-select form-select-sm" id="mes" name="mes">
-                <?php foreach ($state['mes_opciones'] as $mes => $etiqueta) : ?>
-                    <option value="<?php echo esc_attr($mes); ?>" <?php selected($state['mes'], $mes); ?>>
-                        <?php echo esc_html($etiqueta); ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-
         <?php if ($state['puede_filtrar_usuario'] && !empty($state['usuario_opciones'])) : ?>
             <div class="col-12 col-sm-4 col-lg-3">
                 <label class="form-label" for="usuario"><?php esc_html_e('Usuario', 'egc'); ?></label>
@@ -100,9 +89,8 @@ $state   = $manager->view_state_listado();
                     <div class="text-muted small">
                         <?php
                         printf(
-                            /* translators: 1: mes hasta el que se acumula, 2: año */
-                            esc_html__('Acumulado a %1$s de %2$d', 'egc'),
-                            esc_html($state['mes_opciones'][$state['mes']] ?? ''),
+                            /* translators: %d: año del presupuesto */
+                            esc_html__('Monto mensual — %d', 'egc'),
                             (int) $state['año']
                         );
                         ?>

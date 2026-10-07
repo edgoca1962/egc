@@ -188,13 +188,24 @@ class Tablero
             }
         ));
 
-        $año_comparativo = PresupuestoManagement::get_instance()->año_seleccionado();
-        $mes_comparativo = PresupuestoManagement::get_instance()->mes_seleccionado($año_comparativo);
-
-        // Requisito "Comparativo interanual": ver ultimo_periodo_con_datos()
-        // sobre por qué esto se ancla al último movimiento real, nunca al
-        // año/mes de calendario.
+        // Último período con movimientos reales: ancla tanto el
+        // Comparativo interanual como el DEFAULT de mes del Comparativo
+        // real-vs-presupuesto (ver ultimo_periodo_con_datos() sobre por
+        // qué se usa el último movimiento real y nunca el año/mes de
+        // calendario).
         $periodo_interanual = $this->ultimo_periodo_con_datos($user_id);
+
+        $año_comparativo = PresupuestoManagement::get_instance()->año_seleccionado();
+
+        // El mes por defecto del Comparativo real-vs-presupuesto es el
+        // del último movimiento real, pero solo si el año que se está
+        // viendo ES el de ese movimiento: en cualquier otro año ese mes
+        // no tiene relación con lo que se muestra, y rige el default
+        // de siempre (ver PresupuestoManagement::mes_seleccionado()).
+        $mes_ultimo_real = ($periodo_interanual !== null && $periodo_interanual['año'] === $año_comparativo)
+            ? $periodo_interanual['mes']
+            : null;
+        $mes_comparativo = PresupuestoManagement::get_instance()->mes_seleccionado($año_comparativo, $mes_ultimo_real);
 
         $año_actual_interanual   = $periodo_interanual['año'] ?? null;
         $año_anterior_interanual = $año_actual_interanual !== null ? $año_actual_interanual - 1 : null;
@@ -508,12 +519,13 @@ class Tablero
      * comparación es el más reciente CON INFORMACIÓN, nunca el
      * año/mes de CALENDARIO (gmdate('Y')/gmdate('n')) — si todavía no
      * cargó ningún movimiento del mes en curso, no tiene sentido
-     * ofrecerle comparar contra un acumulado vacío. Es, a propósito,
-     * un criterio distinto al que ya usa
-     * PresupuestoManagement::mes_seleccionado() (que si el año es el
-     * actual, asume el mes de calendario): ese default es para el
-     * Presupuesto, que se CARGA hacia adelante; este es para el REAL,
-     * que se CARGA hacia atrás, a medida que ocurre.
+     * ofrecerle comparar contra un acumulado vacío. El mismo criterio
+     * rige el mes por defecto del Comparativo real-vs-presupuesto (ver
+     * view_state()): el real se CARGA hacia atrás, a medida que
+     * ocurre, así que un mes sin movimientos todavía mostraría un
+     * acumulado incompleto. (El Presupuesto, en cambio, se carga hacia
+     * adelante; su propio default sin ancla de real sigue siendo el
+     * mes de calendario, ver PresupuestoManagement::mes_seleccionado().)
      *
      * Se detiene en el primer movimiento que matchea, recorriendo
      * `orderby => date, order => DESC` — no hace falta traer más que
@@ -1123,11 +1135,11 @@ class Tablero
      * subtotal de Egresos y Gastos ya es negativo (`$monto` con
      * signo, ver Libro.php), así que sumarlo es lo que neta
      * correctamente — restarlo lo hubiera sumado dos veces (bug real
-     * que encontró Edwin). `diferencia_presupuestado` sí sigue
-     * restando (PresupuestoManagement::monedas_de(), donde las dos
-     * magnitudes son siempre positivas): cada lado usa la resta o la
-     * suma que corresponde a SU propia convención de signo, no una
-     * regla única para los dos.
+     * que encontró Edwin). `diferencia_presupuestado`, desde que
+     * PresupuestoManagement::monedas_de() devuelve Egresos y Gastos en
+     * negativo, usa la MISMA convención que el real: también es una
+     * suma (Ingresos + Egresos y Gastos), y los dos lados se confrontan
+     * sin conversiones.
      *
      * El REAL de una categoría se muestra siempre, tenga o no
      * presupuesto cargado (Edwin fue explícito: "debe mostrar la
@@ -1138,13 +1150,13 @@ class Tablero
      * columna Variación de esa fila puntual (ver variacion()), nunca
      * a si la fila se muestra.
      *
-     * Categoría y subtotal de tipo comparten la misma convención de
-     * signo que ya traían ingresos_real/egresos_real antes de este
-     * cambio (real: `$monto` crudo de comparativo_real(), positivo
-     * para Ingresos y negativo para Egresos y Gastos; presupuestado:
-     * siempre positivo, porque PresupuestoManagement::monedas_de()
-     * nunca guarda un monto <= 0) — no se tocó ese criterio, solo se
-     * bajó de nivel.
+     * Categoría y subtotal de tipo comparten una única convención de
+     * signo en los dos lados: positivo para Ingresos y negativo para
+     * Egresos y Gastos (real: `$monto` crudo de comparativo_real();
+     * presupuestado: lo que devuelve PresupuestoManagement::monedas_de(),
+     * que aplica el signo según el tipo). Por eso la variación
+     * (real − presupuestado) es positiva cuando se está mejor que lo
+     * presupuestado — más ingreso, o menos egreso — en cualquier fila.
      *
      * @return array<int,array{
      *   etiqueta:string,
@@ -1261,7 +1273,7 @@ class Tablero
 
             $diferencia_real          = round($reporte_real['diferencia'] ?? 0.0, 2);
             $diferencia_presupuestado = round($reporte_presup['diferencia'] ?? 0.0, 2);
-            $diferencia_variacion     = $this->variacion($diferencia_real, $diferencia_presupuestado);
+            $diferencia_variacion     = $this->variacion_superavit($diferencia_real, $diferencia_presupuestado);
 
             $resultado[$moneda_id] = [
                 'etiqueta'                      => BilleteraManagement::get_instance()->moneda_label($moneda_id),
@@ -1277,9 +1289,49 @@ class Tablero
     }
 
     /**
+     * Variación de la fila final "Superávit(Déficit)" de una moneda
+     * (módulo SGF, capa lógica). Misma fórmula que variacion() cuando
+     * hay presupuesto neto: absoluta = real − presupuestado (los dos
+     * ya son Ingresos − Egresos, ver comparativo()), relativa = esa
+     * absoluta sobre el valor absoluto del presupuestado.
+     *
+     * Diferencia con variacion(), pedida por Edwin solo para esta fila:
+     * si el presupuestado neto es 0 (no hay presupuesto, o ingresos y
+     * gastos presupuestados se cancelan) la división es por cero y la
+     * relativa se fija en 100.00 en vez de 0. La absoluta deja de
+     * forzarse a 0: es real − 0, o sea el superávit/déficit real
+     * completo. El signo de ese 100 sigue al de la absoluta (un déficit
+     * real contra presupuesto 0 es −100.00), para que la columna no
+     * muestre un monto negativo con un porcentaje positivo. Si el real
+     * también es 0 no hay variación que firmar y queda 100.00.
+     *
+     * No se tocó variacion(): categorías y subtotales de tipo siguen
+     * devolviendo 0 / 0 sin presupuesto, porque ahí "sin presupuesto"
+     * sí es ausencia de dato y no un neto.
+     *
+     * @return array{absoluta:float, relativa:float}
+     */
+    private function variacion_superavit($real, $presupuestado)
+    {
+        if ($presupuestado == 0.0) {
+            return [
+                'absoluta' => round($real, 2),
+                'relativa' => ($real < 0.0) ? -100.0 : 100.0,
+            ];
+        }
+
+        return $this->variacion($real, $presupuestado);
+    }
+
+    /**
      * Variación absoluta ($real − $presupuestado) y relativa (esa
-     * diferencia sobre $presupuestado, en %) entre lo real y lo
-     * presupuestado de una misma fila del Comparativo.
+     * diferencia sobre el VALOR ABSOLUTO de $presupuestado, en %) entre
+     * lo real y lo presupuestado de una misma fila del Comparativo. Con
+     * Egresos y Gastos en negativo en los dos lados, el absoluto en el
+     * denominador mantiene el signo de la variación igual al de la
+     * absoluta (positivo = mejor que lo presupuestado): sin él, una
+     * fila de egresos daría una absoluta positiva y una relativa
+     * negativa.
      *
      * Caso especial pedido por Edwin: si $presupuestado es 0, las dos
      * se devuelven en 0 en vez de calcularse — nunca 0 en 0 (división
@@ -1301,7 +1353,7 @@ class Tablero
         }
 
         $absoluta = $real - $presupuestado;
-        $relativa = ($absoluta / $presupuestado) * 100;
+        $relativa = ($absoluta / abs($presupuestado)) * 100;
 
         return [
             'absoluta' => round($absoluta, 2),
@@ -1428,11 +1480,9 @@ class Tablero
             // ya es negativo lo SUMA dos veces en vez de netearlo
             // (bug real que encontró Edwin: el Superávit/Déficit daba
             // inflado en vez del neto correcto apenas había algún
-            // egreso). Esto es lo único que corresponde arreglar acá
-            // — $ingresos y $egresos de PresupuestoManagement::monedas_de()
-            // SÍ se restan bien entre sí (ver su propio cálculo de
-            // 'diferencia'), porque ahí las dos magnitudes son
-            // siempre positivas, sin signo que perder.
+            // egreso). El 'diferencia' de
+            // PresupuestoManagement::monedas_de() usa hoy la misma
+            // suma: allí Egresos y Gastos también sale negativo.
             $reporte['diferencia'] = round($ingresos + $egresos, 2);
         }
         unset($reporte);
@@ -1448,14 +1498,13 @@ class Tablero
      * gráfico... el pareto de los aumentos y disminuciones", eligió
      * la opción combinada entre las que se le ofrecieron).
      *
-     * Los dos lados quedan en la MISMA convención de signo que ya usa
+     * Los dos lados vienen en la MISMA convención de signo que ya usa
      * comparativo_real()/comparativo() para la fila "Diferencia": un
      * Ingreso suma, un Egreso resta. `categorias` de comparativo_real()
-     * ya viene así (`$monto` crudo, sin abs()); lo presupuestado
-     * (PresupuestoManagement::monedas_de(), siempre positivo porque
-     * ahí no hay signo que perder — es un monto planeado, no un
-     * movimiento real) se lleva a la misma convención acá: se resta
-     * si es de "Egresos y Gastos", se suma si es de "Ingresos". Así,
+     * ya viene así (`$monto` crudo, sin abs()), y lo presupuestado
+     * (PresupuestoManagement::monedas_de()) también: Egresos y Gastos
+     * sale negativo desde el propio reporte, así que acá alcanza con
+     * restar cada `monto` tal cual. Así,
      * la suma de TODAS las variaciones de categoría coincide EXACTO
      * con (real_total − presupuestado_total) — el punto de llegada
      * del waterfall (ver waterfall_presupuesto()), sin ningún ajuste
@@ -1518,7 +1567,6 @@ class Tablero
                 if (!in_array($grupo['nombre'], ['Ingresos', 'Egresos y Gastos'], true)) {
                     continue;
                 }
-                $signo = $grupo['nombre'] === 'Ingresos' ? 1 : -1;
 
                 foreach ($grupo['filas'] as $fila) {
                     $categoria_term   = $categoria->categoria_de($fila['term_id']);
@@ -1529,7 +1577,9 @@ class Tablero
                         $categorias[$categoria_id] = ['nombre' => $categoria_nombre, 'variacion' => 0.0];
                     }
 
-                    $categorias[$categoria_id]['variacion'] -= $signo * $fila['monto'];
+                    // `monto` ya viene con signo (Egresos y Gastos en
+                    // negativo, ver PresupuestoManagement::monedas_de()).
+                    $categorias[$categoria_id]['variacion'] -= $fila['monto'];
                 }
             }
 
@@ -1617,17 +1667,21 @@ class Tablero
 
     /**
      * "Cascada" (bridge chart) de variación del presupuesto: arranca
-     * en el total REAL, atraviesa la variación de cada categoría (ya
-     * mezcladas Ingresos y Egresos y Gastos, ver
+     * en el total PRESUPUESTADO, atraviesa la variación de cada
+     * categoría (ya mezcladas Ingresos y Egresos y Gastos, ver
      * variacion_por_categoria()) en el mismo orden que armó el 80/20
-     * de armar_pareto_variacion(), y termina en el total Presupuestado
-     * — Edwin pidió explícito este sentido ("debe iniciar del real al
-     * presupuesto"), al revés del orden en que se armaron los datos
-     * (variacion_por_categoria() sigue calculando real − presupuestado,
-     * eso no cambia: cada segmento acá se RESTA en vez de sumarse, así
-     * el recorrido queda invertido sin tocar el signo de "aumento" o
-     * "disminución" de cada categoría, que sigue siendo el mismo con
-     * cualquiera de los dos sentidos). Cada elemento de 'barras' ya
+     * de armar_pareto_variacion(), y termina en el total REAL.
+     *
+     * Sentido Presupuestado → Real (antes iba del Real al
+     * Presupuestado): cada variación es `real − presupuestado`, así que
+     * al recorrer en este sentido se SUMA tal cual al cursor. Así la
+     * dirección de cada barra coincide con su color — 'aumento'
+     * (variación positiva, verde) SUBE, 'disminucion' (negativa, roja)
+     * BAJA — y la cascada cierra exacto en el total Real. En el
+     * sentido anterior (Real → Presupuestado) cada segmento se
+     * restaba, y las barras verdes bajaban y las rojas subían (bug
+     * real que reportó Edwin). Es el mismo esquema de
+     * waterfall_interanual(). Cada elemento de 'barras' ya
      * trae 'desde'/'hasta' listos para que tablero.js dibuje una barra
      * flotante de Chart.js sin tener que acumular nada del lado del
      * cliente (SEPARACIÓN DE CAPAS: la cuenta es lógica, no
@@ -1697,15 +1751,15 @@ class Tablero
 
             $barras   = [];
             $barras[] = [
-                'etiqueta' => __('Real', 'egc'),
+                'etiqueta' => __('Presupuestado', 'egc'),
                 'desde'    => 0.0,
-                'hasta'    => round($reporte['real_total'], 2),
-                'tipo'     => 'real',
+                'hasta'    => round($reporte['presupuestado_total'], 2),
+                'tipo'     => 'presupuestado',
             ];
 
-            $cursor = $reporte['real_total'];
+            $cursor = $reporte['presupuestado_total'];
             foreach ($segmentos as $segmento) {
-                $siguiente = $cursor - $segmento['variacion'];
+                $siguiente = $cursor + $segmento['variacion'];
 
                 $barras[] = [
                     'etiqueta' => $segmento['nombre'],
@@ -1718,10 +1772,10 @@ class Tablero
             }
 
             $barras[] = [
-                'etiqueta' => __('Presupuestado', 'egc'),
+                'etiqueta' => __('Real', 'egc'),
                 'desde'    => 0.0,
-                'hasta'    => round($reporte['presupuestado_total'], 2),
-                'tipo'     => 'presupuestado',
+                'hasta'    => round($reporte['real_total'], 2),
+                'tipo'     => 'real',
             ];
 
             $resultado[$moneda_id] = [
@@ -1816,11 +1870,11 @@ class Tablero
      * variación de cada categoría (ya mezcladas Ingresos y Egresos y
      * Gastos, ver variacion_interanual()) en el mismo orden que armó
      * el 80/20 de armar_pareto_variacion(), y termina en el total REAL
-     * acumulado de $año_actual — a diferencia del waterfall
-     * real-vs-presupuesto (que Edwin pidió invertir a "del real al
-     * presupuesto"), acá el sentido cronológico (año anterior primero,
-     * año actual después) es el que corresponde sin ambigüedad, no
-     * hizo falta preguntarlo.
+     * acumulado de $año_actual — mismo esquema (se suma la variación al
+     * cursor) que el waterfall real-vs-presupuesto, que va de
+     * Presupuestado a Real; acá el sentido cronológico (año anterior
+     * primero, año actual después) es el que corresponde sin
+     * ambigüedad.
      *
      * Sin ningún movimiento que cuente en $año_anterior para una
      * moneda (ver `tiene_dato_anterior` de variacion_interanual()),

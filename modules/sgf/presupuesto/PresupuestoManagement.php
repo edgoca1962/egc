@@ -410,8 +410,6 @@ class PresupuestoManagement
      * @return array{
      *   año: int,
      *   año_opciones: array<int,string>,
-     *   mes: int,
-     *   mes_opciones: array<int,string>,
      *   puede_filtrar_usuario: bool,
      *   usuario_opciones: array<int,string>,
      *   usuario_seleccionado: int,
@@ -427,17 +425,17 @@ class PresupuestoManagement
         $puede_filtrar = UserScope::get_instance()->manages(Presupuesto::POST_TYPE);
         $usuario_id    = $this->usuario_seleccionado($puede_filtrar);
         $año           = $this->año_seleccionado();
-        $mes           = $this->mes_seleccionado($año);
 
         return [
             'año'                   => $año,
             'año_opciones'          => $this->año_opciones(),
-            'mes'                   => $mes,
-            'mes_opciones'          => $this->mes_opciones(),
             'puede_filtrar_usuario' => $puede_filtrar,
             'usuario_opciones'      => $puede_filtrar ? $this->usuario_opciones() : [],
             'usuario_seleccionado'  => $usuario_id,
-            'monedas'               => $this->monedas_de($usuario_id, $año, $mes),
+            // Multiplicador 1: el listado muestra el monto MENSUAL tal
+            // como se cargó. Multiplicar por el mes es solo del
+            // Comparativo contra lo real (ver monedas_de()).
+            'monedas'               => $this->monedas_de($usuario_id, $año, 1),
             'can_create'            => $this->can_create(),
             // Para el redirect_to de post-actions.php: conserva el
             // ?año=&mes=&usuario= actual en vez de volver siempre al
@@ -500,21 +498,38 @@ class PresupuestoManagement
     }
 
     /**
-     * Sin selección explícita en la URL: si el año elegido es el año en
-     * curso, el mes en curso — es el caso de uso que pidió Edwin
-     * ("cuánto llevo acumulado a este mes"); para cualquier otro año,
-     * el año completo (12), porque ya pasó entero y no hay "mes actual"
-     * que tenga sentido ahí.
+     * Sin selección explícita en la URL, el mes que se asume es, en
+     * este orden:
+     *
+     * 1. `$mes_por_defecto`, si el llamador lo pasa — Tablero lo usa
+     *    para anclar el Comparativo real-vs-presupuesto al mes del
+     *    último movimiento REAL (el mismo que ya usa el Comparativo
+     *    interanual), en vez de al mes de calendario: el real se carga
+     *    hacia atrás, así que comparar contra un mes que todavía no
+     *    tiene movimientos mostraría un acumulado incompleto.
+     * 2. Sin `$mes_por_defecto`: si el año elegido es el año en curso,
+     *    el mes en curso; para cualquier otro año, el año completo
+     *    (12), porque ya pasó entero y no hay "mes actual" que tenga
+     *    sentido ahí.
+     *
+     * Una selección explícita en la URL (`?mes=`) siempre gana.
      *
      * Público por el mismo motivo que año_seleccionado(): lo reusa el
      * selector propio de Tablero::comparativo().
+     *
+     * @param int      $año
+     * @param int|null $mes_por_defecto Mes 1..12 a usar sin selección en la URL.
      */
-    public function mes_seleccionado($año)
+    public function mes_seleccionado($año, $mes_por_defecto = null)
     {
         $mes = isset($_GET['mes']) ? absint($_GET['mes']) : 0;
 
         if ($mes >= 1 && $mes <= 12) {
             return $mes;
+        }
+
+        if ($mes_por_defecto !== null && $mes_por_defecto >= 1 && $mes_por_defecto <= 12) {
+            return (int) $mes_por_defecto;
         }
 
         return $año === (int) gmdate('Y') ? (int) gmdate('n') : 12;
@@ -594,16 +609,28 @@ class PresupuestoManagement
      * es ingreso ni egreso real (movimientos entre cuentas propias o
      * pago de tarjeta de crédito).
      *
-     * $mes es la cantidad de meses transcurridos a acumular: cada fila
-     * y cada subtotal muestran `_monto` (el mensual guardado) YA
-     * MULTIPLICADO por $mes, no el valor mensual crudo — es el mismo
-     * criterio que Edwin dio para el futuro Comparativo ("el sexto mes
-     * acumulado real contra el presupuesto, este último se multiplica
-     * por seis"), aplicado acá aunque todavía no exista el lado "real"
-     * de esa comparación (eso sigue siendo Paso 4 aparte). La consulta
-     * de posts no cambia con $mes: sigue siendo por $año únicamente,
-     * porque el presupuesto guardado es siempre el mismo dato mensual
-     * — $mes solo afecta cómo se lo multiplica para mostrarlo.
+     * $mes es la cantidad de meses a acumular: cada fila y cada
+     * subtotal salen de `_monto` (el mensual guardado, que NUNCA se
+     * multiplica al guardarlo) por $mes. Multiplicar es una operación
+     * de COMPARAR contra lo real acumulado ("el sexto mes acumulado
+     * real contra el presupuesto, este último se multiplica por
+     * seis"), por eso solo la pide Tablero::comparativo() con el mes
+     * elegido. El listado de Presupuesto, que muestra el dato tal como
+     * se cargó, pasa 1 (monto mensual sin multiplicar). La consulta de
+     * posts no cambia con $mes: sigue siendo por $año únicamente.
+     *
+     * Signo: Egresos y Gastos sale NEGATIVO (cada fila y su subtotal),
+     * igual que el real de los movimientos (un egreso es un monto
+     * negativo, ver Libro.php) — así presupuesto y real se comparan
+     * en la misma convención sin restar a ciegas. Es una propiedad del
+     * TIPO de la categoría, no un dato guardado: `_monto` sigue siendo
+     * el mensual en positivo que escribe la persona (ver
+     * handle_save()), y el signo se aplica acá al armar el reporte, así
+     * nunca puede quedar desincronizado con la categoría ni hace falta
+     * migrar presupuestos ya cargados. En consecuencia `diferencia` es
+     * Ingresos + Egresos (el egreso ya es negativo), igual que el
+     * neto real: sigue valiendo 0 cuando el presupuesto está
+     * balanceado.
      *
      * Público porque Tablero::comparativo() reusa este mismo reporte
      * como el lado "presupuestado" de la comparación contra lo real —
@@ -645,6 +672,12 @@ class PresupuestoManagement
             $moneda          = (int) get_post_meta($presupuesto->ID, '_moneda', true);
             $monto_mensual   = (float) get_post_meta($presupuesto->ID, '_monto', true);
             $monto_acumulado = round($monto_mensual * $mes, 2);
+
+            // Egresos y Gastos en negativo (ver el docblock): el
+            // signo viene del tipo, no de lo guardado.
+            if ($tipo->name === 'Egresos y Gastos') {
+                $monto_acumulado = -abs($monto_acumulado);
+            }
 
             if (!isset($monedas[$moneda])) {
                 $monedas[$moneda] = [
@@ -706,7 +739,8 @@ class PresupuestoManagement
                 }
             }
             unset($grupo);
-            $reporte['diferencia'] = round($ingresos - $egresos, 2);
+            // Suma, no resta: $egresos ya es negativo.
+            $reporte['diferencia'] = round($ingresos + $egresos, 2);
         }
         unset($reporte);
 
