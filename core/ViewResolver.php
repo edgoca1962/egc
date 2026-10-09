@@ -172,12 +172,12 @@ class ViewResolver
     private function core_page_views()
     {
         return [
-            LoginPage::SLUG        => 'core/views/ingresar',
+            LoginPage::SLUG => 'core/views/ingresar',
             UserRegistration::SLUG => 'core/views/solicitar-ingreso',
-            PasswordReset::SLUG    => 'core/views/definir-contrasena',
-            UserManagement::SLUG   => 'core/views/gestion-usuarios',
-            Account::SLUG          => 'core/views/mi-cuenta',
-            PasswordChange::SLUG   => 'core/views/cambiar-contrasena',
+            PasswordReset::SLUG => 'core/views/definir-contrasena',
+            UserManagement::SLUG => 'core/views/gestion-usuarios',
+            Account::SLUG => 'core/views/mi-cuenta',
+            PasswordChange::SLUG => 'core/views/cambiar-contrasena',
         ];
     }
 
@@ -245,7 +245,7 @@ class ViewResolver
         }
 
         $post_type = $this->current_post_type();
-        $slug      = $this->current_module_slug();
+        $slug = $this->current_module_slug();
 
         if (!$slug) {
             return null;
