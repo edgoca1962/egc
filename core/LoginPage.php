@@ -22,19 +22,6 @@ class LoginPage
 
     const ACTION = 'egc_login';
 
-    /**
-     * Nombre del query var propio para el mensaje de error — a
-     * propósito NO se llama 'error': ese nombre está en la lista
-     * nativa de public query vars de WordPress (WP::$public_query_vars,
-     * en wp-includes/class-wp.php), reservado para el estado interno
-     * de WP_Query. Usarlo hacía que WP::parse_request() lo vaciara de
-     * $_GET en cada petición, antes de que esta clase llegara a leerlo
-     * (headers/cookies/URL mostraban 'error=invalid' correctamente;
-     * $_GET, no). Con un nombre propio del módulo el conflicto
-     * desaparece sin tener que pelear con el motor de queries de WP.
-     */
-    const ERROR_QUERY_VAR = 'login_error';
-
     private $url = null;
 
     private function __construct()
@@ -115,7 +102,7 @@ class LoginPage
 
     private function error_message()
     {
-        $error = isset($_GET[self::ERROR_QUERY_VAR]) ? sanitize_key($_GET[self::ERROR_QUERY_VAR]) : '';
+        $error = isset($_GET['error']) ? sanitize_key($_GET['error']) : '';
 
         switch ($error) {
             case 'invalid':
@@ -148,13 +135,28 @@ class LoginPage
         $redirect_to = isset($_POST['redirect_to']) ? wp_unslash($_POST['redirect_to']) : home_url('/');
         $redirect_to = wp_validate_redirect($redirect_to, home_url('/'));
 
+        /**
+         * Aterrizaje por módulo. Solo cuando el destino es el de
+         * siempre (inicio): si alguien pidió una página concreta, se
+         * respeta. Un módulo que tenga su propia pantalla de entrada se
+         * cuelga de este filtro y devuelve esa URL para SUS usuarios; el
+         * Core no sabe qué módulos hay. Lo que devuelva se vuelve a
+         * validar: un filtro no puede mandar a otro sitio.
+         */
+        if (untrailingslashit($redirect_to) === untrailingslashit(home_url('/'))) {
+            $redirect_to = wp_validate_redirect(
+                apply_filters('egc_login_redirect', $redirect_to, $user),
+                home_url('/')
+            );
+        }
+
         wp_safe_redirect($redirect_to);
         exit;
     }
 
     private function back_with_error($error)
     {
-        wp_safe_redirect(add_query_arg(self::ERROR_QUERY_VAR, $error, $this->url()));
+        wp_safe_redirect(add_query_arg('error', $error, $this->url()));
         exit;
     }
 }

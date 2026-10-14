@@ -160,6 +160,62 @@ class UserScope
     }
 
     /**
+     * @return array<int, array{modulo: string, items: array<int, array{label: string, url: string}>}>
+     *         Igual forma que modulo_links(), para el tercer bloque del
+     *         dropdown: los módulos donde el usuario PARTICIPA (tiene
+     *         alguno de los roles que el manifest declara) pero no
+     *         administra ni tiene CRUD propio — el lector de un módulo
+     *         de consulta, como SCA. Sin este bloque quien solo lee no
+     *         tendría ningún enlace al módulo: ni administra ni es
+     *         autor, así que los otros dos bloques no lo cubren.
+     *
+     *         Los CPT que entran son los mismos que arma links_by()
+     *         (los que tienen archive nativo), y el filtro
+     *         `egc_dropdown_items_{$post_type}` recibe $tier = 'lector'.
+     *         Vacío para el Administrador General, igual que
+     *         modulo_links().
+     */
+    public function lector_links()
+    {
+        if ($this->is_general_admin()) {
+            return [];
+        }
+
+        return $this->links_by(function ($post_type) {
+            return $this->participates($post_type)
+                && !$this->manages($post_type)
+                && !$this->authors($post_type);
+        }, 'lector');
+    }
+
+    /**
+     * @return bool Si el usuario actual tiene alguno de los roles que el
+     *              manifest del módulo de $post_type declara en `roles`.
+     *              Se lee del manifest, no de nombres de rol escritos
+     *              acá: el Core sigue sin saber qué módulos existen.
+     */
+    public function participates($post_type)
+    {
+        $user = wp_get_current_user();
+
+        if (!$user || !$user->exists()) {
+            return false;
+        }
+
+        foreach (ModuleLoader::get_instance()->discover() as $manifest) {
+            if (!in_array($post_type, $this->post_types_of($manifest), true)) {
+                continue;
+            }
+
+            $roles = isset($manifest['roles']) && is_array($manifest['roles']) ? array_keys($manifest['roles']) : [];
+
+            return (bool) array_intersect($roles, (array) $user->roles);
+        }
+
+        return false;
+    }
+
+    /**
      * Recorre los módulos presentes y arma, agrupados por módulo, los
      * CPT de cada uno para los que $condition($post_type) es true.
      * Compartido por modulo_links() y autor_links() — la única

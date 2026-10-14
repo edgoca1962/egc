@@ -30,8 +30,9 @@ if (!defined('ABSPATH')) {
  * 3. El post_type actual (no "page"), si algún módulo lo declaró en
  *    `post_types` de su manifest (module_content_view()) — ese módulo
  *    es dueño de todo ese tipo de contenido, vista single o
- *    archivo/listado según corresponda. Primero se busca la vista
- *    dentro de la subcarpeta propia del CPT
+ *    archivo/listado según corresponda (el listado incluye una
+ *    búsqueda restringida a ese post_type, ver is_listing_of()).
+ *    Primero se busca la vista dentro de la subcarpeta propia del CPT
  *    (modules/<módulo>/<post_type>/views/…) — la convención para un
  *    módulo con más de un CPT, como SGF — y si no está ahí, se cae a
  *    la carpeta plana del módulo (modules/<módulo>/views/…), la
@@ -124,12 +125,43 @@ class ViewResolver
                 continue;
             }
 
-            if (is_singular($post_type) || is_post_type_archive($post_type) || ($post_type === 'post' && is_home())) {
+            if (is_singular($post_type) || $this->is_listing_of($post_type)) {
                 return $slug;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Si lo que se está viendo es el LISTADO de este post_type: su
+     * archivo, la portada del blog, o una búsqueda restringida a él.
+     *
+     * Lo último es nuevo: una búsqueda con `s` y `post_type` explícito
+     * (`/acuerdo/?s=texto`, `/?s=texto&post_type=acuerdo`) es, para
+     * WordPress, una página de búsqueda y no un archivo
+     * (`is_post_type_archive()` no es fiable ahí), pero para el módulo
+     * dueño sigue siendo su listado, con su mismo archive.php. Se exige
+     * que el post_type venga EXPLÍCITO en la consulta: una búsqueda
+     * general del sitio (sin post_type) no pertenece a ningún módulo, y
+     * current_post_type() la confundiría con `post` (Blog).
+     *
+     * @param string $post_type
+     * @return bool
+     */
+    private function is_listing_of($post_type)
+    {
+        if (is_post_type_archive($post_type) || ($post_type === 'post' && is_home())) {
+            return true;
+        }
+
+        $explicito = get_query_var('post_type');
+
+        if (is_array($explicito)) {
+            $explicito = reset($explicito);
+        }
+
+        return is_search() && $explicito !== '' && $explicito === $post_type;
     }
 
     /**
@@ -172,12 +204,12 @@ class ViewResolver
     private function core_page_views()
     {
         return [
-            LoginPage::SLUG => 'core/views/ingresar',
+            LoginPage::SLUG        => 'core/views/ingresar',
             UserRegistration::SLUG => 'core/views/solicitar-ingreso',
-            PasswordReset::SLUG => 'core/views/definir-contrasena',
-            UserManagement::SLUG => 'core/views/gestion-usuarios',
-            Account::SLUG => 'core/views/mi-cuenta',
-            PasswordChange::SLUG => 'core/views/cambiar-contrasena',
+            PasswordReset::SLUG    => 'core/views/definir-contrasena',
+            UserManagement::SLUG   => 'core/views/gestion-usuarios',
+            Account::SLUG          => 'core/views/mi-cuenta',
+            PasswordChange::SLUG   => 'core/views/cambiar-contrasena',
         ];
     }
 
@@ -245,7 +277,7 @@ class ViewResolver
         }
 
         $post_type = $this->current_post_type();
-        $slug = $this->current_module_slug();
+        $slug      = $this->current_module_slug();
 
         if (!$slug) {
             return null;
@@ -255,7 +287,7 @@ class ViewResolver
             return $this->content_view_if_exists($slug, $post_type, 'single');
         }
 
-        if (is_post_type_archive($post_type) || ($post_type === 'post' && is_home())) {
+        if ($this->is_listing_of($post_type)) {
             return $this->content_view_if_exists($slug, $post_type, 'archive');
         }
 

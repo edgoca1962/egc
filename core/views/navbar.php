@@ -92,21 +92,23 @@ $locations = MenuResolver::get_instance()->locations();
                             </li>
                             <?php
                             /**
-                             * Los tres bloques de administración del
-                             * dropdown, mutuamente excluyentes entre "General"
-                             * y el resto (ver UserScope::modulo_links()):
-                             * un Administrador General ve el menú nativo
-                             * completo y nada más; cualquier otro usuario ve,
-                             * cada uno por separado si corresponde, los CPT
-                             * que administra y los CPT donde tiene su propio
-                             * CRUD — ambos calculados recorriendo los módulos
-                             * presentes, sin que ningún módulo tenga que
-                             * declarar ni escribir nada para aparecer acá.
+                             * Los bloques de módulo del dropdown, mutuamente
+                             * excluyentes entre "General" y el resto (ver
+                             * UserScope::modulo_links()): un Administrador
+                             * General ve el menú nativo completo y nada más;
+                             * cualquier otro usuario ve, cada uno por
+                             * separado si corresponde, los CPT que administra,
+                             * los CPT donde tiene su propio CRUD y los
+                             * módulos donde solo participa como lector —
+                             * calculados recorriendo los módulos presentes,
+                             * sin que ningún módulo tenga que declarar ni
+                             * escribir nada para aparecer acá.
                              */
                             $scope            = UserScope::get_instance();
                             $es_admin_general = $scope->is_general_admin();
                             $modulo_grupos    = $scope->modulo_links();
                             $autor_grupos     = $scope->autor_links();
+                            $lector_grupos    = $scope->lector_links();
                             ?>
                             <?php if ($es_admin_general || !empty($modulo_grupos)) : ?>
                                 <li>
@@ -135,6 +137,11 @@ $locations = MenuResolver::get_instance()->locations();
 
                             <?php if (!empty($autor_grupos)) : ?>
                                 <?php $grupos = $autor_grupos; ?>
+                                <?php include EGC_DIR . '/core/views/partials/navbar-dropdown-modulo.php'; ?>
+                            <?php endif; ?>
+
+                            <?php if (!empty($lector_grupos)) : ?>
+                                <?php $grupos = $lector_grupos; ?>
                                 <?php include EGC_DIR . '/core/views/partials/navbar-dropdown-modulo.php'; ?>
                             <?php endif; ?>
                             <li>

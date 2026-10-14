@@ -20,7 +20,7 @@ $state = UserManagement::get_instance()->view_state();
     <?php endif; ?>
 
     <?php if (empty($state['users'])) : ?>
-        <p><?php esc_html_e('No hay usuarios para mostrar.', 'egc'); ?></p>
+        <p><?php echo esc_html($state['empty_message']); ?></p>
     <?php else : ?>
         <div class="table-responsive">
             <table class="table align-middle">
@@ -99,6 +99,9 @@ $state = UserManagement::get_instance()->view_state();
 
                         <?php foreach ($state['post_types'] as $post_type => $data) : ?>
                             <td>
+                                <?php if (!$user['editable'][$post_type]) : ?>
+                                    <span class="text-muted"><?php esc_html_e('Sin acceso', 'egc'); ?></span>
+                                <?php else : ?>
                                 <form method="post" action="<?php echo esc_url($state['roles_form_action']); ?>" class="d-flex gap-1">
                                     <?php wp_nonce_field($state['roles_nonce_action'], $state['nonce_name']); ?>
                                     <input type="hidden" name="action" value="egc_user_roles">
@@ -123,6 +126,7 @@ $state = UserManagement::get_instance()->view_state();
                                         <i class="bi bi-bookmark-fill" aria-hidden="true"></i>
                                     </button>
                                 </form>
+                                <?php endif; ?>
                             </td>
                         <?php endforeach; ?>
 

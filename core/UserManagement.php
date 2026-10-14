@@ -20,6 +20,16 @@ if (!defined('ABSPATH')) {
  *   dentro de ese recurso (se agrega con add_role(), nunca set_role(),
  *   para no pisar roles de otros módulos).
  *
+ * El administrador de módulo solo gestiona usuarios que YA tienen
+ * acceso a ese módulo (algún rol asignable de él): la pantalla no le
+ * lista a nadie más, y el handler lo revalida, porque ocultar es
+ * presentación y no seguridad. Dar el PRIMER acceso a un módulo es del
+ * Administrador General (o del superusuario, que también tiene
+ * edit_users); el de módulo puede cambiar el rol de quien ya participa
+ * o quitarle el acceso — y al quitarlo, esa persona deja de aparecerle.
+ * Con varios módulos la regla es por módulo: quien administra SCA y
+ * SGF no puede darle SCA a alguien que solo tiene SGF.
+ *
  * UserScope resuelve el alcance; esta clase solo aplica los cambios
  * ya autorizados y prepara los datos para la vista.
  */
@@ -111,6 +121,9 @@ class UserManagement
             'statuses'            => UserStatus::get_instance()->all_statuses(),
             'post_types'          => $post_type_data,
             'users'               => $this->users_rows($post_types, $scope),
+            'empty_message'       => $scope->is_general_admin()
+                ? __('No hay usuarios para mostrar.', 'egc')
+                : __('Todavía no hay usuarios con acceso a tus módulos. El primer acceso lo da el Administrador General.', 'egc'),
             'error'               => $this->message('error'),
             'success'             => (bool) $this->message('ok'),
             'status_form_action'        => admin_url('admin-post.php'),
@@ -167,9 +180,17 @@ class UserManagement
 
             $status = UserStatus::get_instance()->get_status($user->ID);
 
-            $roles = [];
+            $roles    = [];
+            $editable = [];
             foreach ($post_types as $post_type) {
-                $roles[$post_type] = $this->current_role_for($user, $scope->assignable_roles($post_type));
+                $roles[$post_type]    = $this->current_role_for($user, $scope->assignable_roles($post_type));
+                // El Administrador General asigna cualquier columna; el de
+                // módulo solo donde la persona ya tiene acceso.
+                $editable[$post_type] = $scope->is_general_admin() || $roles[$post_type] !== '';
+            }
+
+            if (!in_array(true, $editable, true)) {
+                continue; // Administrador de módulo: nadie sin acceso a sus módulos.
             }
 
             $rows[] = [
@@ -179,6 +200,7 @@ class UserManagement
                 'status_label'         => UserStatus::get_instance()->all_statuses()[$status] ?? $status,
                 'valid_next_statuses'  => UserStatus::get_instance()->valid_next_statuses($status),
                 'roles'                => $roles,
+                'editable'             => $editable,
                 'is_admin_general'     => in_array(AdminGeneralRole::ROLE, (array) $user->roles, true),
             ];
         }
@@ -266,6 +288,13 @@ class UserManagement
             $this->back_with_error('forbidden');
         }
 
+        // Administrador de módulo: solo sobre quien YA tiene acceso a
+        // este módulo (la pantalla ya no lo lista, pero un POST armado a
+        // mano no pasa por la pantalla: se revalida acá).
+        if (!UserScope::get_instance()->is_general_admin() && $this->current_role_for($user, $assignable) === '') {
+            $this->back_with_error('forbidden');
+        }
+
         // Mutuamente excluyente dentro del recurso: se saca cualquier
         // otro rol asignable de este mismo recurso antes de agregar el
         // nuevo. add_role() (no set_role()) para no tocar los roles de
@@ -278,6 +307,18 @@ class UserManagement
 
         if ($new_role !== '' && !in_array($new_role, (array) $user->roles, true)) {
             $user->add_role($new_role);
+
+            /**
+             * Aviso genérico de "a este usuario se le acaba de asignar
+             * este rol, para este recurso" — el Core no sabe (ni le
+             * corresponde saber, por ARQUITECTURA MODULAR) qué módulo
+             * declaró $new_role ni qué hace con la noticia; solo avisa.
+             * SGF lo escucha para sembrar categorías la primera vez
+             * (ver Categoria::sembrar_si_corresponde()), pero cualquier
+             * módulo futuro puede colgarse del mismo hook sin que este
+             * archivo se entere ni cambie.
+             */
+            do_action('egc_role_assigned', $user_id, $new_role, $post_type);
         }
 
         $this->back_with_ok();
