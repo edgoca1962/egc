@@ -3,6 +3,7 @@
 namespace EGC\Modules\Sca\Miembro;
 
 use EGC\Core\Singleton;
+use EGC\Modules\Sca\Comite\Comite;
 use EGC\Modules\Sca\Fecha;
 
 if (!defined('ABSPATH')) {
@@ -24,7 +25,8 @@ if (!defined('ABSPATH')) {
  *   no se enrola (ver `_email`).
  * - `_email`: correo de la persona. Es lo que permite completar
  *   `_user_id` cuando se enrole y active su cuenta, sin que el Core
- *   sepa que SCA existe (paso 5, vía el hook egc_user_status_changed).
+ *   sepa que SCA existe (Asignacion::enlazar_membresias(), vía el hook
+ *   egc_user_status_changed). Enlazar no da acceso al módulo.
  * - `_desde` / `_hasta`: vigencia AAAA-MM-DD. Solo se exige para los
  *   puestos de un comité con `_alcance_total` (Junta Directiva); en el
  *   resto quedan vacías y la membresía no vence. La regla se aplica en
@@ -132,5 +134,57 @@ class Miembro
         $hoy   = $hoy ?: Fecha::hoy();
 
         return $desde !== '' && $hasta !== '' && $desde <= $hoy && $hoy <= $hasta;
+    }
+
+    /**
+     * @return int[] Usuarios que coordinan el comité: tienen una
+     *               membresía publicada en él con el puesto que el
+     *               comité declara coordinador (`_puesto_coordinador`);
+     *               un comité sin puesto coordinador no tiene ninguno.
+     *               Misma regla de vigencia que Alcance: en un comité
+     *               de alcance total (Junta) la membresía debe estar
+     *               vigente; en los demás vale mientras exista. Las
+     *               membresías solo por correo (sin usuario) no cuentan:
+     *               esa persona todavía no puede abrir nada.
+     */
+    public static function coordinadores($comite_id)
+    {
+        $comite_id = (int) $comite_id;
+        if ($comite_id <= 0) {
+            return [];
+        }
+
+        $puesto_coordinador = Comite::puesto_coordinador($comite_id);
+        if ($puesto_coordinador <= 0) {
+            return [];
+        }
+
+        $con_vigencia = Comite::alcance_total($comite_id);
+        $usuarios     = [];
+
+        foreach (get_posts([
+            'post_type'        => self::POST_TYPE,
+            'post_status'      => 'publish',
+            'post_parent'      => $comite_id,
+            'posts_per_page'   => -1,
+            'fields'           => 'ids',
+            'no_found_rows'    => true,
+            'suppress_filters' => true,
+        ]) as $miembro_id) {
+            $usuario_id = (int) get_post_meta($miembro_id, self::META_USUARIO, true);
+            $puesto_id  = (int) get_post_meta($miembro_id, self::META_PUESTO, true);
+
+            if ($usuario_id <= 0 || $puesto_id !== $puesto_coordinador) {
+                continue;
+            }
+
+            if ($con_vigencia && !self::vigente($miembro_id)) {
+                continue;
+            }
+
+            $usuarios[$usuario_id] = $usuario_id;
+        }
+
+        return array_values($usuarios);
     }
 }

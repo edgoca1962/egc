@@ -5,7 +5,6 @@ namespace EGC\Modules\Sca\Acuerdo;
 use EGC\Core\Singleton;
 use EGC\Core\UserStatus;
 use EGC\Modules\Sca\Alcance;
-use EGC\Modules\Sca\Consecutivo;
 use EGC\Modules\Sca\Miembro\Miembro;
 
 if (!defined('ABSPATH')) {
@@ -21,31 +20,42 @@ if (!defined('ABSPATH')) {
  * acuerdos, así que la pregunta se responde con la misma capacidad que
  * usa el alcance, sin una bandera aparte que pudiera desincronizarse.
  *
- * Tres situaciones al asignar:
+ * REGLA: solo se asigna a quien ya está enrolado, y asignar no da
+ * acceso a nadie. "Enrolado" son tres cosas a la vez, y las tres tienen
+ * que cumplirse ANTES de asignar:
  *
- *  1. La persona ya tiene cuenta activa: el autor pasa a ser ella.
- *  2. No tiene cuenta: se guarda su correo en `_asignado_email`, el
- *     autor sigue siendo el administrador y se le manda la invitación a
- *     "Solicitar ingreso" (Notificacion). Cuando el administrador del
- *     sitio apruebe esa solicitud, el Core dispara
- *     `egc_user_status_changed` y completar() convierte el correo en
- *     autor — el Core no sabe que SCA existe.
- *  3. Tiene cuenta pero todavía Pendiente: igual que 2, sin correo
- *     (ya pidió ingreso).
+ *  1. Tiene cuenta.
+ *  2. La cuenta está Activa (el estado lo cambia el Administrador
+ *     General desde Gestión de usuarios).
+ *  3. Ya tiene el rol lector de SCA (lo da el Administrador General o
+ *     el superusuario, también desde Gestión de usuarios). La definición
+ *     vive en Alcance::enrolado(), que además es la puerta de la
+ *     visibilidad: sin ese rol no se ve ningún acuerdo.
  *
- * Al completarse el ingreso también se enlazan sus membresías
- * (Miembro con `_email` y sin `_user_id`) y se le da el rol lector del
- * módulo si no tiene ninguno, para que figure como participante de SCA
- * en la gestión de usuarios.
+ * Esta clase nunca crea cuentas, nunca manda invitaciones y nunca
+ * agrega roles: el acceso al módulo lo concede una persona, en un
+ * único lugar. Si el destino no cumple, se devuelve el motivo
+ * (ERR_*) y no se toca nada. Antes existía el camino "asignar a un
+ * correo sin cuenta" (invitación + asignación diferida + rol
+ * automático al activarse): se eliminó por completo, porque era
+ * justamente un acceso concedido sin que nadie lo decidiera.
  *
  * Esta clase NO verifica permisos del usuario actual: eso es del
  * handler (paso 6), que revalida capacidades y nonce antes de llamarla.
- * Acá se validan los DATOS (existe, no es administrador, está activo).
+ * Acá se validan los DATOS (existe, no es administrador, está enrolado).
  *
  * Reasignación masiva (reasignar_todos): cuando cambia la persona de un
  * puesto (el Tesorero nuevo), TODOS los acuerdos del anterior pasan al
- * nuevo de un solo paso. Es necesaria porque la vigencia vencida le
- * quita al anterior el acceso a sus propios acuerdos (ver Alcance).
+ * nuevo de un solo paso, con la misma regla de enrolamiento. Es
+ * necesaria porque la vigencia vencida le quita al anterior el acceso a
+ * sus propios acuerdos (ver Alcance).
+ *
+ * Membresías: cuando una cuenta pasa a Activa, las membresías
+ * (Miembro) registradas con su correo y sin usuario se enlazan a ella.
+ * Enlazar datos no es dar acceso: no se agrega ningún rol, y sin rol
+ * Alcance no le muestra nada. Vive acá,
+ * y no en una clase propia, porque es el único oyente de
+ * `egc_user_status_changed` del módulo y son ~10 líneas.
  *
  * Todas las consultas pasan Acuerdo::SIN_ALCANCE: son del sistema, no
  * deben recortarse según quien las dispare.
@@ -55,22 +65,21 @@ class Asignacion
     use Singleton;
 
     const ROL_LECTOR = 'sca_lector'; // el rol de solo lectura que declara el manifest
+    const ROL_EDITOR = 'sca_editor'; // el administrador del módulo que declara el manifest
 
     // Resultados
-    const OK                    = 'ok';
-    const PENDIENTE_REGISTRO    = 'pendiente_registro';   // sin cuenta: invitación enviada
-    const PENDIENTE_ACTIVACION  = 'pendiente_activacion'; // cuenta en espera de aprobación
-    const ERR_ACUERDO           = 'acuerdo_invalido';
-    const ERR_USUARIO           = 'usuario_invalido';
-    const ERR_ADMINISTRADOR     = 'es_administrador';
-    const ERR_RECHAZADO         = 'usuario_rechazado';
-    const ERR_CORREO            = 'correo_invalido';
-    const ERR_MISMO_USUARIO     = 'mismo_usuario';
-    const ERR_SIN_ADMIN         = 'sin_administrador';
+    const OK                = 'ok';
+    const ERR_ACUERDO       = 'acuerdo_invalido';
+    const ERR_USUARIO       = 'usuario_invalido';
+    const ERR_ADMINISTRADOR = 'es_administrador';
+    const ERR_NO_ACTIVO     = 'usuario_no_activo';  // pendiente o rechazado
+    const ERR_SIN_ACCESO    = 'sin_acceso_sca';     // activo, pero sin rol en el módulo
+    const ERR_MISMO_USUARIO = 'mismo_usuario';
+    const ERR_SIN_ADMIN     = 'sin_administrador';
 
     private function __construct()
     {
-        add_action('egc_user_status_changed', [$this, 'completar'], 10, 3);
+        add_action('egc_user_status_changed', [$this, 'enlazar_membresias'], 10, 3);
     }
 
     /**
@@ -78,15 +87,10 @@ class Asignacion
      * (formularios).
      *
      * @return array{tipo:string,user_id:int,nombre:string,email:string}
-     *         tipo: 'usuario' | 'pendiente' (esperando que se enrole) | 'ninguno'
+     *         tipo: 'usuario' | 'ninguno'
      */
     public function de($acuerdo_id)
     {
-        $pendiente = (string) get_post_meta($acuerdo_id, Acuerdo::META_ASIGNADO_EMAIL, true);
-        if ($pendiente !== '') {
-            return ['tipo' => 'pendiente', 'user_id' => 0, 'nombre' => '', 'email' => $pendiente];
-        }
-
         $acuerdo = get_post($acuerdo_id);
         $usuario = $acuerdo ? get_userdata((int) $acuerdo->post_author) : false;
 
@@ -106,63 +110,17 @@ class Asignacion
             return self::ERR_ACUERDO;
         }
 
-        $usuario = get_userdata((int) $user_id);
-        if (!$usuario) {
-            return self::ERR_USUARIO;
+        $motivo = $this->motivo_no_asignable((int) $user_id);
+        if ($motivo !== self::OK) {
+            return $motivo;
         }
 
-        if (Alcance::get_instance()->administra($usuario->ID)) {
-            return self::ERR_ADMINISTRADOR;
-        }
-
-        switch (UserStatus::get_instance()->get_status($usuario->ID)) {
-            case UserStatus::RECHAZADO:
-                return self::ERR_RECHAZADO;
-
-            case UserStatus::PENDIENTE:
-                return $this->dejar_pendiente($acuerdo_id, $usuario->user_email, self::PENDIENTE_ACTIVACION);
-        }
-
-        // Una invitación pendiente anterior (otro correo) queda sin efecto.
-        delete_post_meta($acuerdo_id, Acuerdo::META_ASIGNADO_EMAIL);
-
-        return $this->poner_autor($acuerdo_id, $usuario->ID);
-    }
-
-    /**
-     * Para quien quizá todavía no tiene cuenta. Si el correo ya
-     * pertenece a un usuario se asigna a ese usuario.
-     *
-     * @return string Uno de los resultados de esta clase.
-     */
-    public function asignar_a_correo($acuerdo_id, $email)
-    {
-        if (!$this->es_acuerdo($acuerdo_id)) {
-            return self::ERR_ACUERDO;
-        }
-
-        $email = self::normalizar_correo($email);
-        if ($email === '') {
-            return self::ERR_CORREO;
-        }
-
-        $existente = get_user_by('email', $email);
-        if ($existente) {
-            return $this->asignar_a_usuario($acuerdo_id, $existente->ID);
-        }
-
-        $resultado = $this->dejar_pendiente($acuerdo_id, $email, self::PENDIENTE_REGISTRO);
-
-        if ($resultado === self::PENDIENTE_REGISTRO) {
-            Notificacion::invitar($email, $acuerdo_id);
-        }
-
-        return $resultado;
+        return $this->poner_autor($acuerdo_id, (int) $user_id);
     }
 
     /**
      * Vuelve a "sin asignar": el autor pasa al administrador que
-     * ejecuta la acción y se borra el correo pendiente.
+     * ejecuta la acción.
      *
      * @return string
      */
@@ -176,8 +134,6 @@ class Asignacion
         if (!$admin_id) {
             return self::ERR_SIN_ADMIN;
         }
-
-        delete_post_meta($acuerdo_id, Acuerdo::META_ASIGNADO_EMAIL);
 
         return $this->poner_autor($acuerdo_id, $admin_id);
     }
@@ -206,20 +162,9 @@ class Asignacion
             return ['codigo' => self::ERR_MISMO_USUARIO, 'cantidad' => 0];
         }
 
-        $destino = get_userdata($a_user_id);
-        if (!$destino) {
-            return ['codigo' => self::ERR_USUARIO, 'cantidad' => 0];
-        }
-
-        if (Alcance::get_instance()->administra($destino->ID)) {
-            return ['codigo' => self::ERR_ADMINISTRADOR, 'cantidad' => 0];
-        }
-
-        // Un destino aún Pendiente no puede recibir en bloque: el
-        // "pendiente" se guarda por acuerdo y habría que repetirlo en
-        // cada uno. Se pide que el destino esté activo.
-        if (UserStatus::get_instance()->get_status($destino->ID) !== UserStatus::ACTIVO) {
-            return ['codigo' => self::ERR_RECHAZADO, 'cantidad' => 0];
+        $motivo = $this->motivo_no_asignable($a_user_id);
+        if ($motivo !== self::OK) {
+            return ['codigo' => $motivo, 'cantidad' => 0];
         }
 
         $ids = get_posts([
@@ -234,19 +179,17 @@ class Asignacion
         ]);
 
         foreach ($ids as $acuerdo_id) {
-            $this->poner_autor($acuerdo_id, $destino->ID);
+            $this->poner_autor($acuerdo_id, $a_user_id);
         }
-
-        $this->garantizar_rol_lector($destino->ID);
 
         return ['codigo' => self::OK, 'cantidad' => count($ids)];
     }
 
     /**
-     * Engancha el ingreso de una persona con lo que SCA ya tenía
-     * esperándola. Se ejecuta al pasar a Activo (hook del Core).
+     * Al pasar una cuenta a Activa (hook del Core), enlaza las
+     * membresías que se registraron con su correo. No concede acceso.
      */
-    public function completar($user_id, $nuevo_estado, $estado_previo)
+    public function enlazar_membresias($user_id, $nuevo_estado, $estado_previo)
     {
         if ($nuevo_estado !== UserStatus::ACTIVO) {
             return;
@@ -262,38 +205,23 @@ class Asignacion
             return;
         }
 
-        $enlazo = false;
-
-        // Acuerdos esperando a este correo (si por un dato raro el
-        // usuario administra el módulo, no se le asignan).
-        if (!Alcance::get_instance()->administra($usuario->ID)) {
-            foreach ($this->acuerdos_pendientes($email) as $acuerdo_id) {
-                delete_post_meta($acuerdo_id, Acuerdo::META_ASIGNADO_EMAIL);
-                $this->poner_autor($acuerdo_id, $usuario->ID);
-                $enlazo = true;
-            }
-        }
-
-        // Membresías registradas por correo: ahora tienen usuario.
         foreach ($this->membresias_sin_usuario($email) as $miembro_id) {
             wp_update_post(['ID' => $miembro_id, 'meta_input' => [Miembro::META_USUARIO => $usuario->ID]]);
-            $enlazo = true;
-        }
-
-        if ($enlazo) {
-            $this->garantizar_rol_lector($usuario->ID);
         }
     }
 
     /**
-     * Personas a las que se puede asignar un acuerdo: usuarios con
-     * cuenta ACTIVA que no administran el módulo.
+     * Personas a las que se puede asignar un acuerdo: las enrolladas
+     * (cuenta Activa + rol lector de SCA) que no administran el módulo.
+     * Es la misma lista que valida asignar_a_usuario(): lo que el
+     * formulario ofrece y lo que el servidor acepta no pueden diferir.
      *
      * @return array<int,string> id => "Nombre (correo)", por orden alfabético.
      */
     public function usuarios_asignables()
     {
         $usuarios = get_users([
+            'role'       => self::ROL_LECTOR,
             'meta_key'   => UserStatus::META_KEY,
             'meta_value' => UserStatus::ACTIVO,
             'orderby'    => 'display_name',
@@ -346,30 +274,36 @@ class Asignacion
             wp_update_post(['ID' => $acuerdo_id, 'post_author' => (int) $user_id]);
         }
 
-        $this->garantizar_rol_lector($user_id);
-
         return self::OK;
     }
 
     /**
-     * Guarda el correo y suelta el acuerdo (autor = administrador),
-     * para que quien estaba asignado antes deje de verlo.
+     * La regla de enrolamiento, en un solo lugar (la usan asignar y
+     * reasignar). Orden de las comprobaciones: de la más básica a la
+     * más específica, para devolver el motivo más útil.
+     *
+     * @return string OK si se le puede asignar; si no, el ERR_* del motivo.
      */
-    private function dejar_pendiente($acuerdo_id, $email, $resultado)
+    private function motivo_no_asignable($user_id)
     {
-        $admin_id = $this->administrador_actual();
-        if (!$admin_id) {
-            return self::ERR_SIN_ADMIN;
+        $usuario = $user_id > 0 ? get_userdata($user_id) : false;
+        if (!$usuario) {
+            return self::ERR_USUARIO;
         }
 
-        update_post_meta($acuerdo_id, Acuerdo::META_ASIGNADO_EMAIL, self::normalizar_correo($email));
-
-        $acuerdo = get_post($acuerdo_id);
-        if (!Alcance::get_instance()->administra((int) $acuerdo->post_author)) {
-            wp_update_post(['ID' => $acuerdo_id, 'post_author' => $admin_id]);
+        if (Alcance::get_instance()->administra($usuario->ID)) {
+            return self::ERR_ADMINISTRADOR;
         }
 
-        return $resultado;
+        if (UserStatus::get_instance()->get_status($usuario->ID) !== UserStatus::ACTIVO) {
+            return self::ERR_NO_ACTIVO;
+        }
+
+        if (!Alcance::get_instance()->enrolado($usuario->ID)) {
+            return self::ERR_SIN_ACCESO;
+        }
+
+        return self::OK;
     }
 
     /**
@@ -381,44 +315,6 @@ class Asignacion
         $actual = get_current_user_id();
 
         return ($actual && Alcance::get_instance()->administra($actual)) ? $actual : 0;
-    }
-
-    /**
-     * Quien participa de SCA sin ser administrador necesita el rol
-     * lector. add_role (no set_role): se SUMA a los roles que ya tenga
-     * en otros módulos.
-     */
-    private function garantizar_rol_lector($user_id)
-    {
-        $usuario = get_userdata($user_id);
-
-        if (!$usuario || Alcance::get_instance()->administra($usuario->ID)) {
-            return;
-        }
-
-        if (!in_array(self::ROL_LECTOR, (array) $usuario->roles, true)) {
-            $usuario->add_role(self::ROL_LECTOR);
-        }
-    }
-
-    /**
-     * @return int[]
-     */
-    private function acuerdos_pendientes($email)
-    {
-        return get_posts([
-            'post_type'          => Acuerdo::POST_TYPE,
-            'post_status'        => Consecutivo::ESTADOS,
-            'posts_per_page'     => -1,
-            'fields'             => 'ids',
-            'no_found_rows'      => true,
-            'suppress_filters'   => true,
-            Acuerdo::SIN_ALCANCE => true,
-            'meta_query'         => [[
-                'key'   => Acuerdo::META_ASIGNADO_EMAIL,
-                'value' => $email,
-            ]],
-        ]);
     }
 
     /**

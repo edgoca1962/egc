@@ -4,6 +4,7 @@ namespace EGC\Modules\Sca\Miembro;
 
 use EGC\Core\Singleton;
 use EGC\Modules\Sca\Acuerdo\Asignacion;
+use EGC\Modules\Sca\Alcance;
 use EGC\Modules\Sca\Comite\Comite;
 use EGC\Modules\Sca\Puesto\Puesto;
 use EGC\Modules\Sca\RecursoManagement;
@@ -20,8 +21,10 @@ if (!defined('ABSPATH')) {
  * - La persona se indica con un usuario existente O con un correo. Con
  *   correo de alguien que todavía no tiene cuenta la membresía queda
  *   "por correo" (`_user_id` = 0) y se enlaza sola cuando esa persona
- *   se enrole y la activen (Asignacion::completar()). Si el correo ya
- *   es de un usuario se usa ese usuario directamente.
+ *   se enrole y la activen (Asignacion::enlazar_membresias()). Enlazar
+ *   no da acceso: el rol del módulo lo da el Administrador General, y
+ *   sin él Alcance no le muestra nada. Si el correo ya es de un usuario
+ *   se usa ese usuario directamente.
  * - El puesto debe servir en el comité: sin comité propio (Coordinador,
  *   Miembro…) o del mismo comité.
  * - Vigencia: OBLIGATORIA (inicio y fin) solo en comités de alcance
@@ -30,6 +33,14 @@ if (!defined('ABSPATH')) {
  *   fechas de su membresía; si cambia la persona del puesto se crea la
  *   membresía nueva y se reasignan los acuerdos del anterior
  *   (Asignacion::reasignar_todos()).
+ *
+ * Quién aparece en la lista de personas: las enrolladas y activas
+ * (las mismas a quienes se asignan acuerdos) MÁS quienes administran
+ * el módulo. A un administrador no se le asignan acuerdos, pero sí
+ * puede ocupar un puesto en un comité; reutilizar tal cual la lista de
+ * asignación lo dejaba fuera del formulario aunque el servidor lo
+ * aceptara. Son dos preguntas distintas y la lista de membresías no
+ * debe heredar la restricción de la otra.
  *
  * El título (`post_title`) se arma al guardar como "Persona — Puesto —
  * Comité" solo para que la lista nativa de wp-admin del superusuario
@@ -115,7 +126,7 @@ class MiembroManagement extends RecursoManagement
         return [
             'comites'  => $this->opciones_comites(),
             'puestos'  => $puestos,
-            'usuarios' => $this->opciones_usuarios(),
+            'usuarios' => $this->personas_elegibles(),
             // Para que la vista avise "vigencia obligatoria" sin conocer la regla:
             'comites_con_vigencia' => array_values(array_filter(
                 array_keys($this->opciones_comites()),
@@ -172,6 +183,26 @@ class MiembroManagement extends RecursoManagement
                 Miembro::META_HASTA   => $hasta,
             ],
         ];
+    }
+
+    /**
+     * @return array<int,string> id => "Nombre (correo)", por orden alfabético.
+     */
+    private function personas_elegibles()
+    {
+        $personas = $this->opciones_usuarios();
+
+        foreach (Alcance::get_instance()->administradores() as $user_id) {
+            $usuario = get_userdata($user_id);
+
+            if ($usuario) {
+                $personas[(int) $user_id] = sprintf('%s (%s)', $usuario->display_name, $usuario->user_email);
+            }
+        }
+
+        asort($personas, SORT_NATURAL | SORT_FLAG_CASE);
+
+        return $personas;
     }
 
     /**

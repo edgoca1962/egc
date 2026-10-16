@@ -11,7 +11,7 @@ if (!defined('ABSPATH')) {
 /**
  * Capa Lógica — registro de recursos del CPT Comité (módulo SCA).
  *
- * Declara el recurso ante WordPress: el CPT y sus tres postmeta. Los
+ * Declara el recurso ante WordPress: el CPT y sus cuatro postmeta. Los
  * formularios, guards y handlers del administrador van en una clase
  * aparte (paso 6): esta cambia si cambia la FORMA del comité, la otra
  * si cambia el FLUJO de uso.
@@ -31,6 +31,14 @@ if (!defined('ABSPATH')) {
  *   "Acta" en vez de "Minuta"; son tres reglas distintas que hoy
  *   coinciden en un solo comité, y se separan en banderas propias el
  *   día que aparezca un segundo caso.
+ * - `_puesto_coordinador`: el Puesto que coordina este comité (0 = sin
+ *   coordinador). Quien ocupa ESE puesto en ESTE comité (tiene una
+ *   membresía del comité con ese puesto) ve todos los acuerdos del
+ *   comité y recibe los avisos de comentarios. Se declara acá y no con
+ *   una bandera en el puesto: un puesto es global ("Presidente" sirve
+ *   en todos los comités) y qué puesto coordina es decisión de cada
+ *   comité. Cambiar de persona es cambiar la membresía, sin tocar el
+ *   comité, y no hay una segunda fuente de verdad que mantener.
  * - `_proximo_acta` / `_proximo_acuerdo`: el próximo consecutivo a
  *   usar, por comité. Arrancan en 1 y el administrador los configura
  *   (tras una migración de datos históricos queda en el siguiente al
@@ -44,7 +52,8 @@ class Comite
 
     const POST_TYPE = 'comite';
 
-    const META_ALCANCE_TOTAL    = '_alcance_total';
+    const META_ALCANCE_TOTAL       = '_alcance_total';
+    const META_PUESTO_COORDINADOR  = '_puesto_coordinador';
     const META_PROXIMO_ACTA     = '_proximo_acta';
     const META_PROXIMO_ACUERDO  = '_proximo_acuerdo';
 
@@ -103,6 +112,15 @@ class Comite
             'auth_callback'     => $auth_callback,
         ]);
 
+        register_post_meta(self::POST_TYPE, self::META_PUESTO_COORDINADOR, [
+            'type'              => 'integer',
+            'single'            => true,
+            'default'           => 0,
+            'show_in_rest'      => false,
+            'sanitize_callback' => 'absint',
+            'auth_callback'     => $auth_callback,
+        ]);
+
         $consecutivo = function ($meta_value) {
             return max(1, absint($meta_value));
         };
@@ -125,6 +143,24 @@ class Comite
     public static function alcance_total($comite_id)
     {
         return (bool) get_post_meta($comite_id, self::META_ALCANCE_TOTAL, true);
+    }
+
+    /**
+     * @return int ID del puesto que coordina el comité (0 = ninguno).
+     */
+    public static function puesto_coordinador($comite_id)
+    {
+        return (int) get_post_meta($comite_id, self::META_PUESTO_COORDINADOR, true);
+    }
+
+    /**
+     * @return bool Si $puesto_id es el puesto que coordina el comité.
+     */
+    public static function coordina($comite_id, $puesto_id)
+    {
+        $coordinador = self::puesto_coordinador($comite_id);
+
+        return $coordinador > 0 && $coordinador === (int) $puesto_id;
     }
 
     /**

@@ -6,6 +6,7 @@ use EGC\Core\LoginPage;
 use EGC\Core\Singleton;
 use EGC\Modules\Sca\Acta\Acta;
 use EGC\Modules\Sca\Alcance;
+use EGC\Modules\Sca\Fecha;
 use EGC\Modules\Sca\Consecutivo;
 
 if (!defined('ABSPATH')) {
@@ -35,9 +36,20 @@ if (!defined('ABSPATH')) {
  *       sca_estatus   → meta_query (clase Estatus)
  *       sca_comite    → post_parent__in = actas del comité (el comité
  *                       está dos saltos arriba: acuerdo → acta → comité)
+ *       sca_acta      → post_parent = el acta (los acuerdos de UNA reunión;
+ *                       tercer nivel del mantenimiento comité → acta →
+ *                       acuerdo). Un valor que no es un acta, o que no es
+ *                       de `sca_comite` si se pidió a la vez, no devuelve
+ *                       nada. Como todo filtro, solo estrecha: el alcance
+ *                       del usuario se aplica después.
  *       sca_asignado  → author (el asignado es el post_author); el
  *                       valor `sin` → author__in = quienes administran
  *                       el módulo (acuerdos sin asignar)
+ *       sca_mios      → los asignados a quien consulta (author__in =
+ *                       el usuario actual); lo usa la barra lateral
+ *                       para "Mis acuerdos por estatus"
+ *    Los filtros se pueden combinar (comité + estatus, mios + estatus):
+ *    la barra lateral los encadena en dos niveles.
  *    Se usa `sca_asignado` y no el `?author=` nativo porque WordPress
  *    redirige `?author=N` a `/author/<nombre-de-usuario>/`, lo que
  *    además expone nombres de usuario. La búsqueda sí es la nativa (`s`):
@@ -58,7 +70,13 @@ class Consulta
 
     const VAR_ESTATUS  = 'sca_estatus';
     const VAR_COMITE   = 'sca_comite';
+    const VAR_ACTA     = 'sca_acta';
     const VAR_ASIGNADO = 'sca_asignado';
+    const VAR_MIOS     = 'sca_mios';
+    const VAR_TODOS    = 'sca_todos';
+
+    /** Marca interna (no es una variable pública): el listado es la pantalla de inicio por omisión. */
+    const INICIO = 'sca_inicio';
 
     /** Valor de sca_asignado para "acuerdos sin asignar". */
     const SIN_ASIGNAR = 'sin';
@@ -87,7 +105,7 @@ class Consulta
 
     public function registrar_variables($vars)
     {
-        return array_merge($vars, [self::VAR_ESTATUS, self::VAR_COMITE, self::VAR_ASIGNADO]);
+        return array_merge($vars, [self::VAR_ESTATUS, self::VAR_COMITE, self::VAR_ACTA, self::VAR_ASIGNADO, self::VAR_MIOS, self::VAR_TODOS]);
     }
 
     /**
@@ -99,8 +117,134 @@ class Consulta
             return;
         }
 
+        $es_lista = $this->es_lista_principal($query);
+
+        if ($es_lista) {
+            $this->aplicar_inicio($query);
+        }
+
         $this->aplicar_filtros($query);
         $this->aplicar_alcance($query);
+
+        if ($es_lista) {
+            $this->ordenar_por_estatus($query);
+        }
+    }
+
+    /**
+     * La consulta principal del listado de acuerdos (el archivo o la
+     * búsqueda), no el detalle de uno ni las consultas de un widget.
+     */
+    private function es_lista_principal($query)
+    {
+        return $query->is_main_query()
+            && ($query->is_post_type_archive(Acuerdo::POST_TYPE) || $query->is_search());
+    }
+
+    /**
+     * Pantalla de inicio: entrar a /acuerdos/ sin elegir nada muestra
+     * los VENCIDOS (lo que pide acción), no todos. Quien administra ve
+     * los vencidos de su alcance; los demás, los suyos (un lector que
+     * ve más por su alcance no debe encontrarse con acuerdos ajenos al
+     * entrar). "Todos" es un enlace explícito (`sca_todos`). Una
+     * búsqueda o cualquier filtro elegido desactiva el inicio.
+     */
+    private function aplicar_inicio($query)
+    {
+        if ($query->is_search()) {
+            return;
+        }
+
+        foreach ([self::VAR_ESTATUS, self::VAR_COMITE, self::VAR_ACTA, self::VAR_ASIGNADO, self::VAR_MIOS, self::VAR_TODOS] as $variable) {
+            if ((string) $query->get($variable) !== '') {
+                return;
+            }
+        }
+
+        $query->set(self::VAR_ESTATUS, Estatus::VENCIDO);
+        $query->set(self::INICIO, true);
+
+        if (!Alcance::get_instance()->administra(get_current_user_id())) {
+            $query->set(self::VAR_MIOS, 1);
+        }
+    }
+
+    /**
+     * Orden del listado completo: Vencidos, Por vencer este mes, En
+     * proceso y Ejecutados (y dentro de cada grupo, lo más urgente
+     * primero: por fecha de compromiso; los ejecutados, el más reciente
+     * primero).
+     *
+     * El estatus no se guarda: se calcula (Estatus) con hoy y el fin de
+     * mes, así que SQL no lo puede ordenar. Se resuelve con lo nativo:
+     * una consulta de IDs con los mismos criterios, se ordenan en
+     * memoria con la misma clase que calcula el estatus, y la consulta
+     * principal recibe `post__in` + `orderby = post__in` (WordPress
+     * pagina sobre ese orden). Si ya hay un estatus elegido (o un acta,
+     * en el mantenimiento) no hace falta: se deja el orden natural.
+     */
+    private function ordenar_por_estatus($query)
+    {
+        if (Estatus::valido((string) $query->get(self::VAR_ESTATUS)) || absint($query->get(self::VAR_ACTA))) {
+            return;
+        }
+
+        $criterio = [
+            'post_type'          => Acuerdo::POST_TYPE,
+            'post_status'        => 'publish',
+            'posts_per_page'     => -1,
+            'fields'             => 'ids',
+            'no_found_rows'      => true,
+            'suppress_filters'   => true,
+            Acuerdo::SIN_ALCANCE => true, // El alcance ya viene en post__in.
+        ];
+
+        foreach (['post__in', 'post_parent', 'post_parent__in', 'author', 'author__in', 's'] as $clave) {
+            $valor = $query->get($clave);
+
+            if ($valor !== '' && $valor !== null && $valor !== []) {
+                $criterio[$clave] = $valor;
+            }
+        }
+
+        $ids = array_map('intval', get_posts($criterio));
+
+        if (count($ids) < 2) {
+            return;
+        }
+
+        update_meta_cache('post', $ids); // Una consulta de metas en vez de una por acuerdo.
+
+        $hoy   = Fecha::hoy();
+        $rango = [Estatus::VENCIDO => 0, Estatus::POR_VENCER => 1, Estatus::EN_PROCESO => 2, Estatus::EJECUTADO => 3];
+        $filas = [];
+
+        foreach ($ids as $id) {
+            $estatus = Estatus::de($id, $hoy);
+            $meta    = $estatus === Estatus::EJECUTADO ? Acuerdo::META_FECHA_EJECUCION : Acuerdo::META_FECHA_COMPROMISO;
+
+            $filas[] = ['rango' => $rango[$estatus], 'fecha' => Fecha::sanitizar(get_post_meta($id, $meta, true)), 'id' => $id];
+        }
+
+        usort($filas, function ($a, $b) {
+            if ($a['rango'] !== $b['rango']) {
+                return $a['rango'] <=> $b['rango'];
+            }
+
+            if ($a['fecha'] !== $b['fecha']) {
+                if ($a['fecha'] === '' || $b['fecha'] === '') {
+                    return $a['fecha'] === '' ? 1 : -1; // Sin fecha, al final del grupo.
+                }
+
+                // Ejecutados: el más reciente primero; los demás: el más próximo primero.
+                return $a['rango'] === 3 ? strcmp($b['fecha'], $a['fecha']) : strcmp($a['fecha'], $b['fecha']);
+            }
+
+            return $a['id'] <=> $b['id'];
+        });
+
+        $query->set('post__in', array_column($filas, 'id'));
+        $query->set('orderby', 'post__in');
     }
 
     /**
@@ -215,11 +359,32 @@ class Consulta
             }
         }
 
+        $acta_id = absint($query->get(self::VAR_ACTA));
+        if ($acta_id) {
+            $acta = get_post($acta_id);
+
+            // Que sea un acta, y del comité pedido si se pidió uno; si no, nada.
+            if (!$acta || $acta->post_type !== Acta::POST_TYPE || ($comite_id && (int) $acta->post_parent !== $comite_id)) {
+                $this->sin_resultados($query);
+            } else {
+                $query->set('post_parent', $acta_id);
+                $query->set('post_parent__in', []);
+            }
+        }
+
         $asignado = $query->get(self::VAR_ASIGNADO);
         if ($asignado === self::SIN_ASIGNAR) {
             $query->set('author__in', Alcance::get_instance()->administradores() ?: [0]);
         } elseif (absint($asignado)) {
             $query->set('author', absint($asignado));
+        }
+
+        // "Mis acuerdos": los asignados a quien consulta. author__in con
+        // [0] y no `author` = 0: WordPress trata author 0 como "sin
+        // filtro", y una consulta sin sesión devolvería todo.
+        if (absint($query->get(self::VAR_MIOS))) {
+            $query->set('author', '');
+            $query->set('author__in', [get_current_user_id() ?: 0]);
         }
     }
 

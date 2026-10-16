@@ -45,6 +45,12 @@ class ActaManagement extends RecursoManagement
         return 'acta-editar';
     }
 
+    /** Las actas se listan dentro de su comité: la pestaña de Administracion es la de comités. */
+    protected function seccion()
+    {
+        return 'comites';
+    }
+
     protected function titulo_pagina()
     {
         return __('Acta', 'egc');

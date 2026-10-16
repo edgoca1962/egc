@@ -22,8 +22,18 @@ if (!defined('ABSPATH')) {
  *    wp-comments-post.php acepta el envío (llama a comments_open() antes
  *    de guardar, así que un POST armado a mano tampoco pasa). Para un
  *    acuerdo está abierto exactamente cuando hay sesión iniciada y el
- *    usuario puede ver ese acuerdo (clase Alcance): el asignado y los
- *    demás lectores del acuerdo comentan; quien no lo ve no puede.
+ *    usuario puede VER ese acuerdo (Alcance::ve): quien puede leer la
+ *    conversación puede participar en ella. Por las reglas de alcance
+ *    eso son, y solo ellos:
+ *      - el administrador del módulo (editor de SCA; también el
+ *        Administrador General y el superusuario);
+ *      - cualquier miembro vigente de la Junta Directiva;
+ *      - el administrador (coordinador) del comité del acuerdo;
+ *      - el dueño del acuerdo (su post_author).
+ *    Un miembro común de un comité solo ve lo suyo, así que solo
+ *    comenta lo suyo. No hay una segunda lista de "quién comenta" que
+ *    pudiera discrepar de la de "quién ve": ver y comentar son la misma
+ *    pregunta y la contesta un solo servicio.
  *    Es la ÚNICA fuente de verdad: se ignora el `comment_status`
  *    guardado en el post, que depende del valor por omisión del sitio
  *    (suele ser "cerrado") y de cómo se creó el acuerdo (formulario,
@@ -36,11 +46,11 @@ if (!defined('ABSPATH')) {
  *    inservible. Solo se mejora un "pendiente" (0): si WordPress o un
  *    plugin antispam lo marcó como spam o devolvió un error, se respeta.
  *
- * Quién modera (aprobar, editar o borrar un comentario ajeno) no se
- * toca acá: `edit_comment` deriva del post padre por map_meta_cap, y
- * `moderate_comments` es del superusuario, como fija el proyecto.
- * Moderar desde el front-end (admin-post.php) queda para un paso
- * posterior si se necesita.
+ * No hay moderación: como todos los que pueden comentar ya están
+ * autorizados y sus comentarios se aprueban solos, no queda nada que
+ * aprobar. `moderate_comments` sigue siendo del superusuario, como fija
+ * el proyecto. El aviso por correo de cada comentario es de
+ * AvisoComentario (otra razón para cambiar: a quién se avisa).
  */
 class Comentarios
 {

@@ -20,9 +20,8 @@ if (!defined('ABSPATH')) {
  * Se mantiene como CPT (y no como taxonomía) justamente por esa
  * pertenencia opcional a un comité, que una taxonomía plana no expresa.
  *
- * Meta `_coordina`: bandera "quien ocupa este puesto ve todos los
- * acuerdos de su comité". Bandera y no comparación con el nombre
- * "Coordinador", mismo criterio que `_alcance_total` en Comite.
+ * El puesto no sabe si coordina: qué puesto coordina un comité lo
+ * declara el propio comité (`_puesto_coordinador` en Comite).
  *
  * No es público en el front-end: lo administra el editor del módulo y
  * el superusuario; ningún lector lo ve.
@@ -33,12 +32,9 @@ class Puesto
 
     const POST_TYPE = 'puesto';
 
-    const META_COORDINA = '_coordina';
-
     private function __construct()
     {
         add_action('init', [$this, 'register_post_type']);
-        add_action('init', [$this, 'register_post_meta']);
     }
 
     public function register_post_type()
@@ -65,29 +61,5 @@ class Puesto
             'map_meta_cap'    => true,
             'show_in_rest'    => false,
         ]);
-    }
-
-    public function register_post_meta()
-    {
-        register_post_meta(self::POST_TYPE, self::META_COORDINA, [
-            'type'              => 'boolean',
-            'single'            => true,
-            'default'           => false,
-            'show_in_rest'      => false,
-            'sanitize_callback' => function ($meta_value) {
-                return filter_var($meta_value, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
-            },
-            'auth_callback'     => function ($allowed, $meta_key, $post_id) {
-                return current_user_can('edit_post', $post_id);
-            },
-        ]);
-    }
-
-    /**
-     * @return bool Si quien ocupa este puesto ve todos los acuerdos de su comité.
-     */
-    public static function coordina($puesto_id)
-    {
-        return (bool) get_post_meta($puesto_id, self::META_COORDINA, true);
     }
 }

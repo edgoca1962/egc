@@ -62,7 +62,7 @@ class Navegacion
 
         $items[] = [
             'label' => __('Administración de acuerdos', 'egc'),
-            'url'   => Administracion::get_instance()->url('actas'),
+            'url'   => Administracion::get_instance()->url('comites'),
         ];
 
         return $items;

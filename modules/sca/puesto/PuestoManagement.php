@@ -13,9 +13,9 @@ if (!defined('ABSPATH')) {
 /**
  * Capa Lógica — CRUD de Puesto en el front-end (módulo SCA).
  *
- * Campos: nombre, comité al que pertenece (opcional: sin comité el
- * puesto sirve en todos) y la bandera "coordina" (quien lo ocupa ve
- * todos los acuerdos de su comité).
+ * Campos: nombre y comité al que pertenece (opcional: sin comité el
+ * puesto sirve en todos). Qué puesto coordina un comité no se
+ * configura acá sino en el comité (ver ComiteManagement).
  */
 class PuestoManagement extends RecursoManagement
 {
@@ -48,7 +48,7 @@ class PuestoManagement extends RecursoManagement
 
     protected function campos_formulario()
     {
-        return ['post_title', 'comite_id', 'coordina'];
+        return ['post_title', 'comite_id'];
     }
 
     protected function mensajes()
@@ -64,7 +64,6 @@ class PuestoManagement extends RecursoManagement
         return [
             'post_title' => $post->post_title,
             'comite_id'  => (string) (int) $post->post_parent,
-            'coordina'   => Puesto::coordina($post->ID) ? '1' : '',
         ];
     }
 
@@ -87,7 +86,7 @@ class PuestoManagement extends RecursoManagement
 
         return [
             'args' => ['post_title' => $nombre, 'post_parent' => $comite_id],
-            'meta' => [Puesto::META_COORDINA => $this->marcado('coordina') ? 1 : 0],
+            'meta' => [],
         ];
     }
 }

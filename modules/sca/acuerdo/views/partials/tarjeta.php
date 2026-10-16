@@ -7,7 +7,8 @@ if (!defined('ABSPATH')) {
 /**
  * Tarjeta de un acuerdo en el listado. Solo pinta lo que
  * Listado::tarjeta() resolvió; los botones de editar/eliminar llegan
- * (o no) ya autorizados en $tarjeta['acciones'].
+ * (o no) ya autorizados en $tarjeta['acciones'], y el de "Marcar
+ * ejecutado" en $tarjeta['ejecutar'] (null si no corresponde).
  *
  * Espera $tarjeta.
  */
@@ -50,9 +51,18 @@ if (!defined('ABSPATH')) {
             <?php esc_html_e('Ver detalle', 'egc'); ?>
         </a>
 
-        <?php if ($tarjeta['acciones']) : ?>
-            <?php $actions = $tarjeta['acciones']; ?>
-            <?php include EGC_DIR . '/core/views/partials/post-actions.php'; ?>
+        <?php if ($tarjeta['ejecutar'] || $tarjeta['acciones']) : ?>
+            <div class="d-inline-flex gap-2">
+                <?php if ($tarjeta['ejecutar']) : ?>
+                    <?php $ejecutar = $tarjeta['ejecutar']; ?>
+                    <?php include EGC_DIR . '/modules/sca/acuerdo/views/partials/ejecutar.php'; ?>
+                <?php endif; ?>
+
+                <?php if ($tarjeta['acciones']) : ?>
+                    <?php $actions = $tarjeta['acciones']; ?>
+                    <?php include EGC_DIR . '/core/views/partials/post-actions.php'; ?>
+                <?php endif; ?>
+            </div>
         <?php endif; ?>
     </div>
 </article>

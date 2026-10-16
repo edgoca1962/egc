@@ -10,6 +10,7 @@ use EGC\Modules\Sca\Acta\ActaManagement;
 use EGC\Modules\Sca\Acuerdo\Acuerdo;
 use EGC\Modules\Sca\Acuerdo\AcuerdoManagement;
 use EGC\Modules\Sca\Acuerdo\Asignacion;
+use EGC\Modules\Sca\Acuerdo\Consulta;
 use EGC\Modules\Sca\Comite\Comite;
 use EGC\Modules\Sca\Comite\ComiteManagement;
 use EGC\Modules\Sca\Miembro\Miembro;
@@ -22,9 +23,9 @@ if (!defined('ABSPATH')) {
 }
 
 /**
- * Capa Lógica (el puente hacia la vista) — pantalla de administración
- * del módulo SCA: los listados de comités, puestos, miembros y actas,
- * y la herramienta de reasignación masiva (módulo SCA).
+ * Capa Puente — pantalla de administración del módulo SCA: el
+ * mantenimiento de comités → actas → acuerdos, el de puestos y
+ * miembros, y la herramienta de reasignación masiva (módulo SCA).
  *
  * Existe porque los lectores navegan SOLO acuerdos (/acuerdo/), pero el
  * administrador necesita llegar a los otros cuatro recursos, que no
@@ -33,11 +34,27 @@ if (!defined('ABSPATH')) {
  * superusuario. Es una Página nativa sembrada (`sca-administracion`)
  * con una sola vista; las secciones se eligen con `?seccion=`.
  *
- * No crea ni borra nada: cada fila pide a su propio *Management los
+ * Mantenimiento por niveles (comités, actas, acuerdos), de arriba a
+ * abajo y siempre en ese orden:
+ *
+ *   1. `?seccion=comites`             tarjetas de comités. El título lleva a:
+ *   2. `?seccion=comites&comite=ID`   tarjetas de las actas de ESE comité.
+ *                                     El título del acta lleva a:
+ *   3. /acuerdo/?sca_acta=ID          el listado de acuerdos de ESE acta
+ *                                     (las tarjetas de siempre, con su
+ *                                     barra lateral y las migas de pan).
+ *
+ * Cada nivel permite agregar el recurso que lista (si la capacidad lo
+ * permite: ocultar un botón es presentación, el handler revalida) y
+ * cada tarjeta trae editar y eliminar. Eliminar es en cascada (ver
+ * Cascada) y la tarjeta avisa cuánto se llevaría por delante. Puestos y
+ * miembros son otro mantenimiento, en pestañas aparte.
+ *
+ * No crea ni borra nada: cada tarjeta pide a su propio *Management los
  * botones de editar/eliminar (actions_for) y los enlaces de alta
  * (url_editar), de modo que la autorización vive en un solo lugar.
- * Esta clase solo ARMA los datos de los listados para que la vista
- * pinte sin consultas ni conocer capacidades.
+ * Esta clase solo ARMA los datos para que la vista pinte sin consultas
+ * ni conocer capacidades.
  *
  * Acceso: solo quien administra el módulo (Alcance::administra).
  */
@@ -57,16 +74,37 @@ class Administracion
     }
 
     /**
-     * @param string $seccion comites|puestos|miembros|actas|herramientas
+     * @param string               $seccion comites|puestos|miembros|herramientas
+     * @param array<string,scalar> $args    parámetros extra de la URL (comite…).
      */
-    public function url($seccion = '')
+    public function url($seccion = '', array $args = [])
     {
         if ($this->url === null) {
             $id        = Pages::get_instance()->find_or_create(__('Administración de acuerdos', 'egc'), self::SLUG);
             $this->url = $id ? get_permalink($id) : home_url('/');
         }
 
-        return $seccion ? add_query_arg('seccion', $seccion, $this->url) : $this->url;
+        $url = $seccion ? add_query_arg('seccion', $seccion, $this->url) : $this->url;
+
+        return $args ? add_query_arg($args, $url) : $url;
+    }
+
+    /**
+     * Nivel 2: las actas de un comité.
+     */
+    public function url_comite($comite_id)
+    {
+        return $this->url('comites', ['comite' => (int) $comite_id]);
+    }
+
+    /**
+     * Nivel 3: los acuerdos de un acta (el archivo de acuerdos filtrado).
+     */
+    public function url_acta($acta_id)
+    {
+        $archivo = get_post_type_archive_link(Acuerdo::POST_TYPE) ?: home_url('/');
+
+        return add_query_arg(Consulta::VAR_ACTA, (int) $acta_id, $archivo);
     }
 
     public function guard_access()
@@ -93,8 +131,7 @@ class Administracion
     public function secciones()
     {
         return [
-            'actas'        => __('Actas y minutas', 'egc'),
-            'comites'      => __('Comités', 'egc'),
+            'comites'      => __('Comités, actas y acuerdos', 'egc'),
             'puestos'      => __('Puestos', 'egc'),
             'miembros'     => __('Miembros', 'egc'),
             'herramientas' => __('Herramientas', 'egc'),
@@ -103,9 +140,11 @@ class Administracion
 
     /**
      * @return array{
-     *   seccion:string, titulo:string,
+     *   seccion:string, titulo:string, modo:string,
      *   tabs:array<int,array{label:string,url:string,activa:bool}>,
-     *   columnas:string[], filas:array<int,array>, nuevo_url:string, nuevo_etiqueta:string,
+     *   migas:array<int,array{label:string,url:string}>,
+     *   columnas:string[], filas:array<int,array>, tarjetas:array<int,array>,
+     *   nuevo_url:string, nuevo_etiqueta:string, vacio:string,
      *   paginacion:?array, herramientas:?array,
      *   ok:bool, error:string, cantidad:int, acuerdos_url:string
      * }
@@ -117,16 +156,20 @@ class Administracion
 
         return [
             'seccion'        => $seccion,
-            'titulo'         => $this->secciones()[$seccion],
+            'titulo'         => $listado['titulo'],
+            'modo'           => $listado['modo'],
             'tabs'           => $this->tabs($seccion),
+            'migas'          => $listado['migas'],
             'columnas'       => $listado['columnas'],
             'filas'          => $listado['filas'],
+            'tarjetas'       => $listado['tarjetas'],
             'nuevo_url'      => $listado['nuevo_url'],
             'nuevo_etiqueta' => $listado['nuevo_etiqueta'],
+            'vacio'          => $listado['vacio'],
             'paginacion'     => $listado['paginacion'],
             'herramientas'   => $seccion === 'herramientas' ? $this->herramientas() : null,
             'ok'             => isset($_GET['ok']),
-            'error'          => $this->mensaje_error(),
+            'error'          => $listado['error'] !== '' ? $listado['error'] : $this->mensaje_error(),
             'cantidad'       => isset($_GET['cantidad']) ? absint($_GET['cantidad']) : 0,
             'acuerdos_url'   => get_post_type_archive_link(Acuerdo::POST_TYPE) ?: home_url('/'),
         ];
@@ -138,7 +181,19 @@ class Administracion
     {
         $seccion = isset($_GET['seccion']) ? sanitize_key($_GET['seccion']) : '';
 
-        return isset($this->secciones()[$seccion]) ? $seccion : 'actas';
+        return isset($this->secciones()[$seccion]) ? $seccion : 'comites';
+    }
+
+    /**
+     * @return int El comité pedido en `?comite=` si es un comité publicado; 0 si no.
+     */
+    private function comite_pedido()
+    {
+        $comite_id = isset($_GET['comite']) ? absint($_GET['comite']) : 0;
+
+        return ($comite_id && get_post_type($comite_id) === Comite::POST_TYPE && get_post_status($comite_id) === 'publish')
+            ? $comite_id
+            : 0;
     }
 
     private function tabs($activa)
@@ -168,24 +223,40 @@ class Administracion
     }
 
     /**
-     * @return array{columnas:string[],filas:array,nuevo_url:string,nuevo_etiqueta:string,paginacion:?array}
+     * @return array{
+     *   titulo:string,modo:string,migas:array,columnas:string[],filas:array,tarjetas:array,
+     *   nuevo_url:string,nuevo_etiqueta:string,vacio:string,paginacion:?array,error:string
+     * }
      */
     private function listado($seccion)
     {
-        $vacio = ['columnas' => [], 'filas' => [], 'nuevo_url' => '', 'nuevo_etiqueta' => '', 'paginacion' => null];
-
         switch ($seccion) {
             case 'comites':
-                return $this->listar_comites();
+                return isset($_GET['comite']) ? $this->listar_actas_de_comite() : $this->listar_comites();
             case 'puestos':
                 return $this->listar_puestos();
             case 'miembros':
                 return $this->listar_miembros();
-            case 'actas':
-                return $this->listar_actas();
         }
 
-        return $vacio;
+        return $this->base_listado($this->secciones()[$seccion], 'herramientas');
+    }
+
+    private function base_listado($titulo, $modo = 'tabla')
+    {
+        return [
+            'titulo'         => $titulo,
+            'modo'           => $modo,
+            'migas'          => [],
+            'columnas'       => [],
+            'filas'          => [],
+            'tarjetas'       => [],
+            'nuevo_url'      => '',
+            'nuevo_etiqueta' => '',
+            'vacio'          => __('Todavía no hay registros.', 'egc'),
+            'paginacion'     => null,
+            'error'          => '',
+        ];
     }
 
     private function consulta($post_type, array $orden)
@@ -200,7 +271,7 @@ class Administracion
         ], $orden));
     }
 
-    private function paginacion(\WP_Query $consulta)
+    private function paginacion(\WP_Query $consulta, $url_base)
     {
         $total = (int) ceil($consulta->found_posts / self::POR_PAGINA);
 
@@ -211,80 +282,142 @@ class Administracion
         return [
             'actual' => isset($_GET['pagina']) ? max(1, absint($_GET['pagina'])) : 1,
             'total'  => $total,
-            'base'   => add_query_arg('pagina', '%#%', $this->url($this->seccion_pedida())),
+            'base'   => add_query_arg('pagina', '%#%', $url_base),
         ];
     }
 
-    private function fila($id, array $celdas, $manager, array $enlaces = [])
+    /**
+     * Editar / eliminar de un registro, o null si el usuario no puede
+     * ninguna de las dos (la vista no pinta nada).
+     */
+    private function acciones_de($id, $manager)
     {
         $acciones = $manager->actions_for($id);
 
-        // Tras eliminar, quedarse en esta misma pantalla (sección y página).
+        // Tras eliminar, quedarse en esta misma pantalla (sección, nivel y página).
         $acciones['redirect_to'] = home_url(add_query_arg(null, null));
 
+        return ($acciones['can_edit'] || $acciones['can_trash']) ? $acciones : null;
+    }
+
+    private function fila($id, array $celdas, $manager)
+    {
         return [
             'id'       => (int) $id,
             'celdas'   => $celdas,
-            'acciones' => ($acciones['can_edit'] || $acciones['can_trash']) ? $acciones : null,
-            'enlaces'  => $enlaces,
+            'acciones' => $this->acciones_de($id, $manager),
         ];
     }
 
+    /**
+     * Una tarjeta de los niveles comités / actas.
+     *
+     * @param array<int,array{0:string,1:string}> $detalles pares rótulo => valor.
+     * @param array<int,array{texto:string,badge:string}> $insignias
+     */
+    private function tarjeta($id, $titulo, $url, array $detalles, array $insignias, $aviso, $manager)
+    {
+        return [
+            'id'        => (int) $id,
+            'titulo'    => $titulo,
+            'url'       => $url,
+            'detalles'  => $detalles,
+            'insignias' => $insignias,
+            'aviso'     => $aviso,
+            'acciones'  => $this->acciones_de($id, $manager),
+        ];
+    }
+
+    /**
+     * Texto de la tarjeta sobre lo que arrastra eliminar (Cascada).
+     * Vacío si no arrastra nada.
+     */
+    private function aviso_cascada($actas, $acuerdos)
+    {
+        $partes = [];
+
+        if ($actas > 0) {
+            /* translators: %s: cantidad de actas */
+            $partes[] = sprintf(_n('%s acta o minuta', '%s actas o minutas', $actas, 'egc'), number_format_i18n($actas));
+        }
+        if ($acuerdos > 0) {
+            /* translators: %s: cantidad de acuerdos */
+            $partes[] = sprintf(_n('%s acuerdo', '%s acuerdos', $acuerdos, 'egc'), number_format_i18n($acuerdos));
+        }
+
+        return $partes
+            /* translators: %s: lista de lo que se elimina junto con el registro */
+            ? sprintf(__('Al eliminarlo también se eliminan: %s.', 'egc'), implode(' y ', $partes))
+            : '';
+    }
+
+    /**
+     * Nivel 1: los comités.
+     */
     private function listar_comites()
     {
         $manager  = ComiteManagement::get_instance();
         $consulta = $this->consulta(Comite::POST_TYPE, ['orderby' => 'title', 'order' => 'ASC']);
-        $filas    = [];
+        $listado  = $this->base_listado(__('Comités', 'egc'), 'tarjetas');
 
         foreach ($consulta->posts as $comite) {
-            $filas[] = $this->fila($comite->ID, [
+            $arrastra = Cascada::get_instance()->resumen($comite->ID);
+            $puesto   = Comite::puesto_coordinador($comite->ID);
+
+            $listado['tarjetas'][] = $this->tarjeta(
+                $comite->ID,
                 $comite->post_title,
-                Comite::alcance_total($comite->ID) ? ['texto' => __('Alcance total', 'egc'), 'badge' => 'primary'] : '—',
-                (string) max(1, (int) get_post_meta($comite->ID, Comite::META_PROXIMO_ACTA, true)),
-                (string) max(1, (int) get_post_meta($comite->ID, Comite::META_PROXIMO_ACUERDO, true)),
-            ], $manager);
+                $this->url_comite($comite->ID),
+                [
+                    [__('Coordina', 'egc'), $puesto ? get_the_title($puesto) : '—'],
+                    [__('Actas o minutas', 'egc'), (string) $arrastra['actas']],
+                    [__('Acuerdos', 'egc'), (string) $arrastra['acuerdos']],
+                    [__('Próx. acta', 'egc'), (string) max(1, (int) get_post_meta($comite->ID, Comite::META_PROXIMO_ACTA, true))],
+                    [__('Próx. acuerdo', 'egc'), (string) max(1, (int) get_post_meta($comite->ID, Comite::META_PROXIMO_ACUERDO, true))],
+                ],
+                Comite::alcance_total($comite->ID) ? [['texto' => __('Alcance total', 'egc'), 'badge' => 'primary']] : [],
+                $this->aviso_cascada($arrastra['actas'], $arrastra['acuerdos']),
+                $manager
+            );
         }
 
-        return [
-            'columnas'       => [__('Nombre', 'egc'), __('Visibilidad', 'egc'), __('Próx. acta', 'egc'), __('Próx. acuerdo', 'egc')],
-            'filas'          => $filas,
-            'nuevo_url'      => $manager->can_create() ? $manager->con_regreso_aqui($manager->url_editar()) : '',
-            'nuevo_etiqueta' => __('Agregar comité', 'egc'),
-            'paginacion'     => $this->paginacion($consulta),
-        ];
+        $listado['nuevo_url']      = $manager->can_create() ? $manager->con_regreso_aqui($manager->url_editar()) : '';
+        $listado['nuevo_etiqueta'] = __('Agregar comité', 'egc');
+        $listado['vacio']          = __('Todavía no hay comités.', 'egc');
+        $listado['paginacion']     = $this->paginacion($consulta, $this->url('comites'));
+
+        return $listado;
     }
 
     private function listar_puestos()
     {
         $manager  = PuestoManagement::get_instance();
         $consulta = $this->consulta(Puesto::POST_TYPE, ['orderby' => 'title', 'order' => 'ASC']);
-        $filas    = [];
+        $listado  = $this->base_listado(__('Puestos', 'egc'));
 
         foreach ($consulta->posts as $puesto) {
-            $filas[] = $this->fila($puesto->ID, [
+            $listado['filas'][] = $this->fila($puesto->ID, [
                 $puesto->post_title,
-                $puesto->post_parent ? Comite::nombre($puesto->post_parent) : __('Todos los comités', 'egc'),
-                Puesto::coordina($puesto->ID) ? ['texto' => __('Ve todo su comité', 'egc'), 'badge' => 'info'] : '—',
+                $puesto->post_parent ? Comite::nombre($puesto->post_parent) : __('Sin comité asignado', 'egc'),
             ], $manager);
         }
 
-        return [
-            'columnas'       => [__('Nombre', 'egc'), __('Comité', 'egc'), __('Coordina', 'egc')],
-            'filas'          => $filas,
-            'nuevo_url'      => $manager->can_create() ? $manager->con_regreso_aqui($manager->url_editar()) : '',
-            'nuevo_etiqueta' => __('Agregar puesto', 'egc'),
-            'paginacion'     => $this->paginacion($consulta),
-        ];
+        $listado['columnas']       = [__('Nombre', 'egc'), __('Comité', 'egc')];
+        $listado['nuevo_url']      = $manager->can_create() ? $manager->con_regreso_aqui($manager->url_editar()) : '';
+        $listado['nuevo_etiqueta'] = __('Agregar puesto', 'egc');
+        $listado['paginacion']     = $this->paginacion($consulta, $this->url('puestos'));
+
+        return $listado;
     }
 
     private function listar_miembros()
     {
         $manager  = MiembroManagement::get_instance();
         $consulta = $this->consulta(Miembro::POST_TYPE, ['orderby' => 'title', 'order' => 'ASC']);
-        $filas    = [];
+        $listado  = $this->base_listado(__('Miembros', 'egc'));
 
         foreach ($consulta->posts as $miembro) {
-            $filas[] = $this->fila($miembro->ID, [
+            $listado['filas'][] = $this->fila($miembro->ID, [
                 $this->persona_de($miembro->ID),
                 Comite::nombre($miembro->post_parent),
                 get_the_title((int) get_post_meta($miembro->ID, Miembro::META_PUESTO, true)),
@@ -292,47 +425,69 @@ class Administracion
             ], $manager);
         }
 
-        return [
-            'columnas'       => [__('Persona', 'egc'), __('Comité', 'egc'), __('Puesto', 'egc'), __('Vigencia', 'egc')],
-            'filas'          => $filas,
-            'nuevo_url'      => $manager->can_create() ? $manager->con_regreso_aqui($manager->url_editar()) : '',
-            'nuevo_etiqueta' => __('Agregar miembro', 'egc'),
-            'paginacion'     => $this->paginacion($consulta),
-        ];
+        $listado['columnas']       = [__('Persona', 'egc'), __('Comité', 'egc'), __('Puesto', 'egc'), __('Vigencia', 'egc')];
+        $listado['nuevo_url']      = $manager->can_create() ? $manager->con_regreso_aqui($manager->url_editar()) : '';
+        $listado['nuevo_etiqueta'] = __('Agregar miembro', 'egc');
+        $listado['paginacion']     = $this->paginacion($consulta, $this->url('miembros'));
+
+        return $listado;
     }
 
-    private function listar_actas()
+    /**
+     * Nivel 2: las actas o minutas de UN comité. Un `?comite=` que no
+     * es un comité publicado no rompe nada: se explica y se vuelve a
+     * mostrar el nivel 1.
+     */
+    private function listar_actas_de_comite()
     {
-        $manager         = ActaManagement::get_instance();
-        $acuerdo_manager = AcuerdoManagement::get_instance();
-        $consulta        = $this->consulta(Acta::POST_TYPE, ['orderby' => 'date', 'order' => 'DESC']);
-        $cantidades      = $this->acuerdos_por_acta(wp_list_pluck($consulta->posts, 'ID'));
-        $filas           = [];
+        $comite_id = $this->comite_pedido();
 
-        foreach ($consulta->posts as $acta) {
-            $enlaces = [];
-            if ($acuerdo_manager->can_create()) {
-                $enlaces[] = [
-                    'label' => __('Agregar acuerdo', 'egc'),
-                    'icon'  => 'plus-lg',
-                    'url'   => $acuerdo_manager->con_regreso_aqui($acuerdo_manager->url_editar(['acta_id' => $acta->ID])),
-                ];
-            }
+        if (!$comite_id) {
+            $listado          = $this->listar_comites();
+            $listado['error'] = __('No se encontró ese comité.', 'egc');
 
-            $filas[] = $this->fila($acta->ID, [
-                $acta->post_title,
-                substr($acta->post_date, 0, 10),
-                (string) ($cantidades[$acta->ID] ?? 0),
-            ], $manager, $enlaces);
+            return $listado;
         }
 
-        return [
-            'columnas'       => [__('Acta o minuta', 'egc'), __('Fecha de la reunión', 'egc'), __('Acuerdos', 'egc')],
-            'filas'          => $filas,
-            'nuevo_url'      => $manager->can_create() ? $manager->con_regreso_aqui($manager->url_editar()) : '',
-            'nuevo_etiqueta' => __('Agregar acta o minuta', 'egc'),
-            'paginacion'     => $this->paginacion($consulta),
+        $manager    = ActaManagement::get_instance();
+        $consulta   = $this->consulta(Acta::POST_TYPE, ['orderby' => 'date', 'order' => 'DESC', 'post_parent' => $comite_id]);
+        $cantidades = $this->acuerdos_por_acta(wp_list_pluck($consulta->posts, 'ID'));
+        $nombre     = Comite::nombre($comite_id);
+        $listado    = $this->base_listado(
+            /* translators: %s: nombre del comité */
+            sprintf(__('Actas y minutas de %s', 'egc'), $nombre),
+            'tarjetas'
+        );
+
+        foreach ($consulta->posts as $acta) {
+            $acuerdos = (int) ($cantidades[$acta->ID] ?? 0);
+
+            $listado['tarjetas'][] = $this->tarjeta(
+                $acta->ID,
+                $acta->post_title,
+                $this->url_acta($acta->ID),
+                [
+                    [__('Fecha de la reunión', 'egc'), substr($acta->post_date, 0, 10)],
+                    [__('Acuerdos', 'egc'), (string) $acuerdos],
+                ],
+                [],
+                $this->aviso_cascada(0, $acuerdos),
+                $manager
+            );
+        }
+
+        $listado['migas'] = [
+            ['label' => __('Comités', 'egc'), 'url' => $this->url('comites')],
+            ['label' => $nombre, 'url' => ''],
         ];
+        $listado['nuevo_url']      = $manager->can_create()
+            ? $manager->con_regreso_aqui($manager->url_editar(['comite_id' => $comite_id]))
+            : '';
+        $listado['nuevo_etiqueta'] = __('Agregar acta o minuta', 'egc');
+        $listado['vacio']          = __('Este comité todavía no tiene actas ni minutas.', 'egc');
+        $listado['paginacion']     = $this->paginacion($consulta, $this->url_comite($comite_id));
+
+        return $listado;
     }
 
     /**
@@ -378,7 +533,16 @@ class Administracion
     }
 
     /**
-     * @return string|array Texto, o texto + badge cuando la vigencia tiene efecto (Junta).
+     * @return string|array Texto, o texto + clase de la insignia.
+     *
+     * En un comité de alcance total (Junta) la vigencia TIENE efecto
+     * (da o quita el acceso): insignia sólida, regla estricta
+     * (Miembro::vigente). En los demás comités las fechas son
+     * informativas (la membresía vale mientras exista): insignia de
+     * contorno y rótulo "en fechas" / "fuera de fechas", para que no
+     * se confunda con la de la Junta. Aquí una fecha puede faltar (solo
+     * "desde" o solo "hasta"): el extremo vacío no limita. Sin ninguna
+     * fecha no hay nada que calificar y se muestra solo el guion.
      */
     private function vigencia_de($miembro)
     {
@@ -386,13 +550,22 @@ class Administracion
         $hasta = (string) get_post_meta($miembro->ID, Miembro::META_HASTA, true);
         $rango = ($desde !== '' || $hasta !== '') ? sprintf('%s → %s', $desde ?: '…', $hasta ?: '…') : '—';
 
-        if (!Comite::alcance_total($miembro->post_parent)) {
+        if (Comite::alcance_total($miembro->post_parent)) {
+            return Miembro::vigente($miembro->ID)
+                ? ['texto' => $rango . ' · ' . __('vigente', 'egc'), 'clase' => 'text-bg-success']
+                : ['texto' => $rango . ' · ' . __('no vigente', 'egc'), 'clase' => 'text-bg-secondary'];
+        }
+
+        if ($desde === '' && $hasta === '') {
             return $rango;
         }
 
-        return Miembro::vigente($miembro->ID)
-            ? ['texto' => $rango . ' · ' . __('vigente', 'egc'), 'badge' => 'success']
-            : ['texto' => $rango . ' · ' . __('no vigente', 'egc'), 'badge' => 'secondary'];
+        $hoy      = Fecha::hoy();
+        $en_fecha = ($desde === '' || $desde <= $hoy) && ($hasta === '' || $hoy <= $hasta);
+
+        return $en_fecha
+            ? ['texto' => $rango . ' · ' . __('en fechas', 'egc'), 'clase' => 'border border-success text-success']
+            : ['texto' => $rango . ' · ' . __('fuera de fechas', 'egc'), 'clase' => 'border border-secondary text-secondary'];
     }
 
     /**

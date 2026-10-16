@@ -40,6 +40,23 @@ $v = $state['valores'];
                     </p>
                 </div>
 
+                <div class="mb-3">
+                    <label class="form-label" for="puesto_coordinador"><?php esc_html_e('Puesto que coordina el comité', 'egc'); ?></label>
+                    <select class="form-select" id="puesto_coordinador" name="puesto_coordinador">
+                        <option value="0" <?php selected($v['puesto_coordinador'] ?? '0', '0'); ?>>
+                            <?php esc_html_e('Sin coordinador', 'egc'); ?>
+                        </option>
+                        <?php foreach ($state['opciones']['puestos'] as $id => $nombre) : ?>
+                            <option value="<?php echo esc_attr($id); ?>" <?php selected($v['puesto_coordinador'] ?? '', (string) $id); ?>>
+                                <?php echo esc_html($nombre); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="form-text">
+                        <?php esc_html_e('Quien ocupe este puesto en este comité (con una membresía) ve todos los acuerdos del comité y recibe los avisos de comentarios. Si cambia la persona, se cambia la membresía: el comité sigue coordinado por el mismo puesto. Aparecen los puestos sin comité y los propios de este comité.', 'egc'); ?>
+                    </p>
+                </div>
+
                 <div class="row g-3 mb-3">
                     <div class="col-md-6">
                         <label class="form-label" for="proximo_acta"><?php esc_html_e('Próximo número de acta o minuta', 'egc'); ?></label>

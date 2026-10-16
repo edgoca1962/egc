@@ -7,6 +7,7 @@ use EGC\Modules\Sca\Acta\ActaManagement;
 use EGC\Modules\Sca\Acuerdo\Acuerdo;
 use EGC\Modules\Sca\Acuerdo\AcuerdoManagement;
 use EGC\Modules\Sca\Acuerdo\Asignacion;
+use EGC\Modules\Sca\Acuerdo\AvisoComentario;
 use EGC\Modules\Sca\Acuerdo\Comentarios;
 use EGC\Modules\Sca\Acuerdo\Consulta;
 use EGC\Modules\Sca\Comite\Comite;
@@ -33,7 +34,7 @@ if (!defined('ABSPATH')) {
  *
  * Orden: primero los cinco recursos y sus metas; después los servicios
  * de reglas (alcance, sincronización de títulos y fechas, consultas
- * de acuerdos, asignación, comentarios); luego el CRUD del
+ * de acuerdos, asignación, comentarios y su aviso por correo); luego el CRUD del
  * administrador y, al final, las entradas de navegación (menú del
  * avatar y aterrizaje tras el login). Listado (puente de las vistas)
  * no se instancia acá: lo pide la vista cuando la necesita.
@@ -46,9 +47,11 @@ Acuerdo::get_instance();
 
 Alcance::get_instance();
 Sincronizacion::get_instance();
+Cascada::get_instance();
 Consulta::get_instance();
 Asignacion::get_instance();
 Comentarios::get_instance();
+AvisoComentario::get_instance();
 
 // CRUD del administrador (formularios, handlers de admin-post.php) y
 // su pantalla de listados.

@@ -4,9 +4,9 @@ namespace EGC\Modules\Sca;
 
 use EGC\Core\Singleton;
 use EGC\Modules\Sca\Acuerdo\Acuerdo;
+use EGC\Modules\Sca\Acuerdo\Asignacion;
 use EGC\Modules\Sca\Comite\Comite;
 use EGC\Modules\Sca\Miembro\Miembro;
-use EGC\Modules\Sca\Puesto\Puesto;
 
 if (!defined('ABSPATH')) {
     exit; // Exit if accessed directly.
@@ -28,11 +28,19 @@ if (!defined('ABSPATH')) {
  *
  * Reglas (las acordadas con el negocio):
  *
+ * 0. PUERTA: sin acceso al módulo no se ve nada. Quien no administra y
+ *    no tiene el rol lector de SCA (enrolado) tiene alcance vacío, tenga
+ *    las membresías que tenga y esté lo que esté asignado a su nombre.
+ *    El rol lo da una persona (el Administrador General, en Gestión de
+ *    usuarios); ni asignar un acuerdo, ni registrar una membresía, ni
+ *    activar una cuenta lo conceden. Las reglas 1 a 6 definen QUÉ ve
+ *    quien ya está adentro; esta define SI está adentro.
  * 1. Administrador del módulo o superusuario: todo.
  * 2. Membresía VIGENTE en un comité con `_alcance_total` (Junta
  *    Directiva): todos los acuerdos de todos los comités.
- * 3. Membresía en otro comité con un puesto `_coordina`: todos los
- *    acuerdos de ESE comité.
+ * 3. Membresía en otro comité con el puesto que ese comité declara
+ *    coordinador (`_puesto_coordinador`): todos los acuerdos de ESE
+ *    comité.
  * 4. Siempre, además: los acuerdos asignados al propio usuario
  *    (post_author) — con una excepción, la siguiente.
  * 5. Solo los puestos de Junta Directiva tienen vigencia. Un usuario
@@ -70,6 +78,8 @@ class Alcance
         foreach ([
             'save_post_miembro', 'save_post_puesto', 'save_post_comite',
             'trashed_post', 'untrashed_post', 'deleted_post',
+            // El acceso depende del rol: si cambia, la respuesta cacheada ya no vale.
+            'add_user_role', 'remove_user_role', 'set_user_role',
         ] as $hook) {
             add_action($hook, [$this, 'olvidar']);
         }
@@ -105,6 +115,23 @@ class Alcance
         $post_type = get_post_type_object(Acuerdo::POST_TYPE);
 
         return $post_type && user_can($user_id, $post_type->cap->edit_others_posts);
+    }
+
+    /**
+     * @return bool Si el usuario está enrolado en el módulo: tiene el
+     *              rol lector de SCA (el que da el Administrador
+     *              General). Los administradores no lo necesitan: su
+     *              acceso viene de sus capacidades (ver administra()).
+     *
+     * Es la ÚNICA definición de "enrolado": la usa la puerta de de()
+     * y la regla de asignación (Asignacion), para que quien puede ver
+     * y a quien se puede asignar nunca discrepen.
+     */
+    public function enrolado($user_id)
+    {
+        $usuario = (int) $user_id > 0 ? get_userdata((int) $user_id) : false;
+
+        return $usuario && in_array(Asignacion::ROL_LECTOR, (array) $usuario->roles, true);
     }
 
     /**
@@ -176,6 +203,11 @@ class Alcance
             return ['todo' => true, 'comites' => [], 'propios' => true];
         }
 
+        // Regla 0: sin el rol del módulo no hay acceso, por más membresías o acuerdos que tenga.
+        if (!$this->enrolado($user_id)) {
+            return $sin_acceso;
+        }
+
         $comites         = [];
         $tiene_membresia = false;
         $vigente_fuera   = false; // membresía vigente (cualquiera) que sostiene el acceso
@@ -199,7 +231,7 @@ class Alcance
             $vigente_fuera = true;
 
             $puesto_id = (int) get_post_meta($miembro_id, Miembro::META_PUESTO, true);
-            if ($puesto_id && Puesto::coordina($puesto_id)) {
+            if (Comite::coordina($comite_id, $puesto_id)) {
                 $comites[$comite_id] = $comite_id;
             }
         }

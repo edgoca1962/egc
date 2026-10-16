@@ -20,13 +20,16 @@ if (!defined('ABSPATH')) {
  *
  * 1. Número consecutivo: un acta/acuerdo sin `_numero` recibe el
  *    siguiente de su comité (ver Consecutivo).
- * 2. Título y slug. Se guardan en `post_title` / `post_name`, no se
- *    calculan al mostrar, para que la búsqueda nativa de WordPress
- *    (`s`), el orden y los enlaces los vean:
+ * 2. Título. Se guarda en `post_title`, no se calcula al mostrar, para
+ *    que la búsqueda nativa de WordPress (`s`) y el orden lo vean:
  *      Acta/Minuta:  `Acta-001 2026-10-13 Junta Directiva`
  *      Acuerdo:      `Acuerdo-004 Acta-001 2026-10-13 Junta Directiva`
  *    La palabra es "Acta" si el comité tiene alcance total (Junta
  *    Directiva) y "Minuta" en los demás; la fecha es la de la reunión.
+ *    El slug (`post_name`) NO se deriva del título: lo fija el Core
+ *    (PostSlugs) una sola vez, al crear el registro, y no cambia
+ *    aunque cambie el título. Antes se regeneraba desde el título y la
+ *    URL de un acta o acuerdo cambiaba si cambiaba su fecha o comité.
  * 3. Fecha de la reunión: los acuerdos de un acta tienen SIEMPRE el
  *    `post_date` de su acta. Se corrige el acuerdo al guardarlo y se
  *    propaga a todos sus acuerdos cuando cambia el acta.
@@ -172,7 +175,7 @@ class Sincronizacion
             $nombre
         );
 
-        $this->actualizar($acta, ['post_title' => $titulo, 'post_name' => sanitize_title($titulo)]);
+        $this->actualizar($acta, ['post_title' => $titulo]);
 
         // La fecha de la reunión (y por tanto el título) puede haber cambiado.
         foreach ($this->acuerdos_de($acta_id) as $acuerdo_id) {
@@ -222,7 +225,6 @@ class Sincronizacion
         // el viejo gmt) y edit_date para aceptar el cambio.
         $this->actualizar($acuerdo, [
             'post_title'    => $titulo,
-            'post_name'     => sanitize_title($titulo),
             'post_date'     => $acta->post_date,
             'post_date_gmt' => $acta->post_date_gmt,
             'edit_date'     => true,

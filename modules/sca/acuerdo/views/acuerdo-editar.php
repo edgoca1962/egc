@@ -73,14 +73,9 @@ $v = $state['valores'];
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label" for="asignado_email"><?php esc_html_e('o correo de quien aún no tiene cuenta', 'egc'); ?></label>
-                            <input class="form-control" type="email" id="asignado_email" name="asignado_email"
-                                   value="<?php echo esc_attr($v['asignado_email'] ?? ''); ?>">
-                        </div>
                     </div>
                     <p class="form-text mb-0">
-                        <?php esc_html_e('Con un correo sin cuenta se le envía una invitación para solicitar su ingreso; el acuerdo queda a su nombre cuando lo aprueben. Para quitar la asignación, dejá ambos campos vacíos.', 'egc'); ?>
+                        <?php esc_html_e('Solo aparecen personas con cuenta activa y acceso al módulo. Si falta alguien, el Administrador General debe darle acceso primero desde Gestión de usuarios. Para quitar la asignación, elegí «Sin asignar».', 'egc'); ?>
                     </p>
                 </fieldset>
 

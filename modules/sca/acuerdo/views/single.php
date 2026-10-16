@@ -53,10 +53,17 @@ $tarjeta = Listado::get_instance()->view_state_single(get_queried_object_id());
             </div>
         </div>
 
-        <?php if ($tarjeta['acciones']) : ?>
-            <div class="card-footer text-end">
-                <?php $actions = $tarjeta['acciones']; ?>
-                <?php include EGC_DIR . '/core/views/partials/post-actions.php'; ?>
+        <?php if ($tarjeta['ejecutar'] || $tarjeta['acciones']) : ?>
+            <div class="card-footer d-flex justify-content-end gap-2">
+                <?php if ($tarjeta['ejecutar']) : ?>
+                    <?php $ejecutar = $tarjeta['ejecutar']; ?>
+                    <?php include EGC_DIR . '/modules/sca/acuerdo/views/partials/ejecutar.php'; ?>
+                <?php endif; ?>
+
+                <?php if ($tarjeta['acciones']) : ?>
+                    <?php $actions = $tarjeta['acciones']; ?>
+                    <?php include EGC_DIR . '/core/views/partials/post-actions.php'; ?>
+                <?php endif; ?>
             </div>
         <?php endif; ?>
     </article>

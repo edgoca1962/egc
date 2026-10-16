@@ -27,12 +27,24 @@ if (!defined('ABSPATH')) {
  * normal de acuerdos y no repite la regla de alcance: lo que no puede
  * ver el usuario no aparece ni en la lista ni en los contadores.
  *
- * Barra lateral (como la pantalla anterior): búsqueda, "Acuerdos por
- * Estatus", "Acuerdos por Comité" y "Acuerdos asignados a", cada uno
- * con su cantidad. Se aplica UN filtro a la vez; elegir otro reemplaza
- * al anterior (y quita la búsqueda). Los contadores son los del alcance
- * del usuario, no dependen del filtro activo: sirven para decidir
- * adónde ir, no para resumir lo que se está viendo.
+ * Barra lateral: búsqueda, "Acuerdos por Estatus", "Acuerdos por
+ * Comité" y "Acuerdos asignados a", cada uno con su cantidad.
+ *  - Estatus: quien administra el módulo ve los de todo su alcance; los
+ *    demás ven "Mis acuerdos por estatus" (solo los asignados a ellos).
+ *  - Comité y persona: llevan a un SEGUNDO NIVEL (un comité o una
+ *    persona elegidos, sin estatus): el listado no muestra acuerdos y
+ *    ofrece los estatus de ese comité/persona, dentro del alcance del
+ *    usuario. Elegido el estatus, se listan.
+ * Los contadores son los del alcance del usuario, no dependen del
+ * filtro activo: sirven para decidir adónde ir, no para resumir lo que
+ * se está viendo.
+ *
+ * Pantalla de inicio: entrar a /acuerdos/ sin elegir nada es "Vencidos"
+ * (lo decide Consulta y marca la consulta con Consulta::INICIO; acá solo
+ * se lee). "Todos" es la ÚLTIMA opción de la sección de estatus. Si no
+ * hay vencidos, el listado dice que no cuenta con acuerdos vencidos y
+ * ofrece ir a "Todos". El orden de "Todos" (Vencidos, Por vencer este
+ * mes, En proceso, Ejecutados) también lo resuelve Consulta.
  *
  * Una consulta y agrupación en memoria, en vez de una consulta por
  * contador: el estatus se calcula por acuerdo con la misma clase que
@@ -79,9 +91,15 @@ class Listado
         $base    = $this->url_archivo();
         $filtro  = $this->filtro_activo($base);
 
+        // Segundo nivel: elegido un comité o una persona SIN estatus, no se
+        // listan sus acuerdos; se ofrecen los estatus para elegir.
+        $nivel = $filtro['nivel'] ? $this->nivel($base, $filtro) : null;
+
         $tarjetas = [];
-        foreach ((array) $wp_query->posts as $acuerdo) {
-            $tarjetas[] = $this->tarjeta($acuerdo);
+        if (!$nivel) {
+            foreach ((array) $wp_query->posts as $acuerdo) {
+                $tarjetas[] = $this->tarjeta($acuerdo);
+            }
         }
 
         return [
@@ -93,16 +111,61 @@ class Listado
                 'valor'     => (string) get_query_var('s'),
             ],
             'secciones'   => $this->secciones($base, $filtro),
-            'filtro'      => $filtro['descripcion'] === '' ? null : [
+            // En la pantalla de inicio no hay filtro que mostrar ni quitar:
+            // es el punto de partida, no una selección de la persona.
+            'filtro'      => ($filtro['descripcion'] === '' || $filtro['inicio']) ? null : [
                 'texto'      => $filtro['descripcion'],
-                'quitar_url' => $base,
+                'quitar_url' => add_query_arg(Consulta::VAR_TODOS, 1, $base),
+                'volver_url' => $this->url_nivel($base, $filtro),
             ],
+            'inicio'      => $filtro['inicio'],
+            'vacio'       => $this->vacio($base, $filtro),
+            'nivel'       => $nivel,
             'tarjetas'    => $tarjetas,
-            'total'       => (int) $wp_query->found_posts,
-            'paginacion'  => (string) get_the_posts_pagination(['mid_size' => 1]),
+            'total'       => $nivel ? 0 : (int) $wp_query->found_posts,
+            'paginacion'  => $nivel ? '' : (string) get_the_posts_pagination(['mid_size' => 1]),
             'admin_url'   => Alcance::get_instance()->administra(get_current_user_id())
-                ? Administracion::get_instance()->url('actas')
+                ? Administracion::get_instance()->url('comites')
                 : '',
+            'contexto'    => $this->contexto($filtro['acta']),
+        ];
+    }
+
+    /**
+     * Tercer nivel del mantenimiento comité → acta → acuerdo: cuando el
+     * listado está filtrado por UN acta, la pantalla muestra las migas de
+     * pan hacia los niveles de arriba (solo a quien administra: esas
+     * pantallas son suyas) y el botón de agregar un acuerdo a esa acta
+     * (solo a quien tiene la capacidad; el handler revalida).
+     *
+     * @return array{migas:array,nuevo_url:string,nuevo_etiqueta:string}|null
+     */
+    private function contexto($acta_id)
+    {
+        $acta = $acta_id ? get_post($acta_id) : null;
+
+        if (!$acta || $acta->post_type !== Acta::POST_TYPE) {
+            return null;
+        }
+
+        $migas = [];
+        if (Alcance::get_instance()->administra(get_current_user_id())) {
+            $admin = Administracion::get_instance();
+            $migas = [
+                ['label' => __('Comités', 'egc'), 'url' => $admin->url('comites')],
+                ['label' => Comite::nombre($acta->post_parent), 'url' => $admin->url_comite($acta->post_parent)],
+                ['label' => $acta->post_title, 'url' => ''],
+            ];
+        }
+
+        $manager = AcuerdoManagement::get_instance();
+
+        return [
+            'migas'          => $migas,
+            'nuevo_url'      => $manager->can_create()
+                ? $manager->con_regreso_aqui($manager->url_editar(['acta_id' => $acta->ID]))
+                : '',
+            'nuevo_etiqueta' => __('Agregar acuerdo', 'egc'),
         ];
     }
 
@@ -114,47 +177,213 @@ class Listado
     }
 
     /**
-     * Qué filtro (de los públicos de Consulta) o búsqueda hay activo.
+     * Qué filtros (de los públicos de Consulta) o búsqueda hay activos.
+     * Se pueden combinar (comité + estatus, mios + estatus); la
+     * descripción los une con " · ".
      *
-     * @return array{estatus:string,comite:int,asignado:string,busqueda:string,descripcion:string}
+     * `nivel` es verdadero cuando se eligió un comité o una persona y
+     * todavía NO un estatus: el segundo nivel de la barra lateral.
+     *
+     * `inicio` es verdadero cuando nadie eligió nada y Consulta puso los
+     * vencidos por omisión; `todos`, cuando se pidió "Todos" explícito.
+     *
+     * Se lee de la consulta principal ($wp_query->get) y no de la URL:
+     * lo que cuenta es lo que Consulta terminó aplicando, incluido el
+     * estatus por omisión del inicio.
+     *
+     * @return array{estatus:string,comite:int,acta:int,asignado:string,mios:bool,busqueda:string,descripcion:string,nivel:bool,inicio:bool,todos:bool}
      */
     private function filtro_activo($base)
     {
-        $estatus  = (string) get_query_var(Consulta::VAR_ESTATUS);
-        $comite   = absint(get_query_var(Consulta::VAR_COMITE));
-        $asignado = (string) get_query_var(Consulta::VAR_ASIGNADO);
-        $busqueda = trim((string) get_query_var('s'));
+        global $wp_query;
+
+        $estatus  = (string) $wp_query->get(Consulta::VAR_ESTATUS);
+        $comite   = absint($wp_query->get(Consulta::VAR_COMITE));
+        $acta     = absint($wp_query->get(Consulta::VAR_ACTA));
+        $asignado = (string) $wp_query->get(Consulta::VAR_ASIGNADO);
+        $mios     = absint($wp_query->get(Consulta::VAR_MIOS)) > 0;
+        $todos    = absint($wp_query->get(Consulta::VAR_TODOS)) > 0;
+        $busqueda = trim((string) $wp_query->get('s'));
+        $inicio   = (bool) $wp_query->get(Consulta::INICIO);
 
         $estatus = Estatus::valido($estatus) ? $estatus : '';
         if ($asignado !== Consulta::SIN_ASIGNAR) {
             $asignado = absint($asignado) ? (string) absint($asignado) : '';
         }
 
-        $descripcion = '';
-        if ($estatus !== '') {
-            /* translators: %s: nombre del estatus */
-            $descripcion = sprintf(__('Estatus: %s', 'egc'), Estatus::etiqueta($estatus));
+        $partes = [];
+        if ($mios) {
+            $partes[] = __('Mis acuerdos', 'egc');
+        }
+        if ($acta) {
+            /* translators: %s: título del acta o minuta */
+            $partes[] = sprintf(__('Acta: %s', 'egc'), get_the_title($acta));
         } elseif ($comite) {
             /* translators: %s: nombre del comité */
-            $descripcion = sprintf(__('Comité: %s', 'egc'), Comite::nombre($comite));
-        } elseif ($asignado === Consulta::SIN_ASIGNAR) {
-            $descripcion = __('Acuerdos sin asignar', 'egc');
+            $partes[] = sprintf(__('Comité: %s', 'egc'), Comite::nombre($comite));
+        }
+        if ($asignado === Consulta::SIN_ASIGNAR) {
+            $partes[] = __('Acuerdos sin asignar', 'egc');
         } elseif ($asignado !== '') {
             $usuario = get_userdata((int) $asignado);
             /* translators: %s: nombre de la persona */
-            $descripcion = sprintf(__('Asignados a: %s', 'egc'), $usuario ? $usuario->display_name : '#' . $asignado);
-        } elseif ($busqueda !== '') {
+            $partes[] = sprintf(__('Asignados a: %s', 'egc'), $usuario ? $usuario->display_name : '#' . $asignado);
+        }
+        if ($estatus !== '') {
+            /* translators: %s: nombre del estatus */
+            $partes[] = sprintf(__('Estatus: %s', 'egc'), Estatus::etiqueta($estatus));
+        }
+        if (!$partes && $busqueda !== '') {
             /* translators: %s: texto buscado */
-            $descripcion = sprintf(__('Búsqueda: %s', 'egc'), $busqueda);
+            $partes[] = sprintf(__('Búsqueda: %s', 'egc'), $busqueda);
         }
 
         return [
             'estatus'     => $estatus,
             'comite'      => $comite,
+            'acta'        => $acta,
             'asignado'    => $asignado,
+            'mios'        => $mios,
             'busqueda'    => $busqueda,
-            'descripcion' => $descripcion,
+            'descripcion' => implode(' · ', $partes),
+            'nivel'       => $estatus === '' && !$acta && !$mios && $busqueda === '' && ($comite || $asignado !== ''),
+            'inicio'      => $inicio,
+            'todos'       => $todos,
         ];
+    }
+
+    /**
+     * Dirección de "Todos": para quien administra, todo su alcance
+     * (`sca_todos`, el modo explícito: sin él se abriría Vencidos); para
+     * los demás, todos SUS acuerdos (`sca_mios`).
+     */
+    private function url_todos($base)
+    {
+        return Alcance::get_instance()->administra(get_current_user_id())
+            ? add_query_arg(Consulta::VAR_TODOS, 1, $base)
+            : add_query_arg(Consulta::VAR_MIOS, 1, $base);
+    }
+
+    /**
+     * Qué decir cuando la lista no tiene acuerdos. Sin vencidos, la
+     * buena noticia (y un enlace a "Todos"); en cualquier otro caso, el
+     * aviso neutro.
+     *
+     * @return array{texto:string,tipo:string,todos_url:string}
+     */
+    private function vacio($base, array $filtro)
+    {
+        // Una búsqueda sin resultados no dice nada sobre los vencidos.
+        if ($filtro['estatus'] === Estatus::VENCIDO && $filtro['busqueda'] === '') {
+            return [
+                'texto'     => __('No cuenta con Acuerdos Vencidos.', 'egc'),
+                'tipo'      => 'success',
+                'todos_url' => $this->url_todos($base),
+            ];
+        }
+
+        return [
+            'texto'     => __('No hay acuerdos para mostrar.', 'egc'),
+            'tipo'      => 'muted',
+            'todos_url' => '',
+        ];
+    }
+
+    /**
+     * Segundo nivel: los estatus de UN comité o de UNA persona, con
+     * cuántos acuerdos tiene cada uno dentro del alcance del usuario.
+     *
+     * @return array{titulo:string,total:int,estatus:array}
+     */
+    private function nivel($base, array $filtro)
+    {
+        $hoy     = Fecha::hoy();
+        $cuentas = array_fill_keys(array_keys(Estatus::todos()), 0);
+        $total   = 0;
+
+        foreach ($this->acuerdos_del_filtro($filtro) as $acuerdo) {
+            $cuentas[Estatus::de($acuerdo->ID, $hoy)]++;
+            $total++;
+        }
+
+        $propio  = $this->url_nivel($base, $filtro);
+        $estatus = [];
+
+        foreach (Estatus::todos() as $slug => $etiqueta) {
+            $estatus[] = [
+                'label' => $etiqueta,
+                'count' => $cuentas[$slug],
+                'color' => self::COLORES[$slug],
+                'url'   => add_query_arg(Consulta::VAR_ESTATUS, $slug, $propio),
+            ];
+        }
+
+        return ['titulo' => $filtro['descripcion'], 'total' => $total, 'estatus' => $estatus];
+    }
+
+    /**
+     * URL del segundo nivel del filtro activo (solo el comité o solo la
+     * persona), o '' si el filtro no tiene segundo nivel.
+     */
+    private function url_nivel($base, array $filtro)
+    {
+        if ($filtro['acta'] || $filtro['mios']) {
+            return '';
+        }
+
+        if ($filtro['comite']) {
+            return add_query_arg(Consulta::VAR_COMITE, $filtro['comite'], $base);
+        }
+
+        if ($filtro['asignado'] !== '') {
+            return add_query_arg(Consulta::VAR_ASIGNADO, $filtro['asignado'], $base);
+        }
+
+        return '';
+    }
+
+    /**
+     * Los acuerdos del alcance del usuario que corresponden al comité o a
+     * la persona del filtro (en memoria, sobre la misma consulta que usa
+     * la barra lateral: contador y lista no pueden discrepar).
+     *
+     * @return \WP_Post[]
+     */
+    private function acuerdos_del_filtro(array $filtro)
+    {
+        $acuerdos       = $this->acuerdos_visibles();
+        $comite_de_acta = $filtro['comite'] ? $this->comites_de_actas($acuerdos) : [];
+        $alcance        = Alcance::get_instance();
+        $out            = [];
+
+        foreach ($acuerdos as $acuerdo) {
+            if ($filtro['comite'] && ($comite_de_acta[(int) $acuerdo->post_parent] ?? 0) !== $filtro['comite']) {
+                continue;
+            }
+
+            if ($filtro['asignado'] === Consulta::SIN_ASIGNAR) {
+                if (!$this->sin_asignar($acuerdo, $alcance)) {
+                    continue;
+                }
+            } elseif ($filtro['asignado'] !== '' && (int) $acuerdo->post_author !== (int) $filtro['asignado']) {
+                continue;
+            }
+
+            $out[] = $acuerdo;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Misma definición de "sin asignar" que Asignacion::de(): el autor
+     * administra el módulo o ya no existe.
+     */
+    private function sin_asignar($acuerdo, Alcance $alcance)
+    {
+        $autor = (int) $acuerdo->post_author;
+
+        return $alcance->administra($autor) || !get_userdata($autor);
     }
 
     // ------------------------------------------------------------------
@@ -164,51 +393,76 @@ class Listado
     /**
      * @return array<int,array{titulo:string,items:array}> Cada item:
      *         label, count, url, activo.
+     *
+     * "Acuerdos por Estatus" depende de quién mira. Quien administra el
+     * módulo no tiene acuerdos propios (a un administrador no se le
+     * asignan), así que ve los estatus de todo su alcance. Los demás ven
+     * "Mis acuerdos por estatus": solo los asignados a ellos, para
+     * revisar rápido el estado de lo suyo. Comité y persona no cambian:
+     * llevan a un segundo nivel con los estatus (ver nivel()).
      */
     private function secciones($base, array $filtro)
     {
         $acuerdos = $this->acuerdos_visibles();
         $hoy      = Fecha::hoy();
+        $alcance  = Alcance::get_instance();
+        $yo       = get_current_user_id();
 
         $por_estatus = array_fill_keys(array_keys(Estatus::todos()), 0);
+        $mios        = array_fill_keys(array_keys(Estatus::todos()), 0);
+        $total_mios  = 0;
         $por_comite  = [];
         $por_persona = [];
         $sin_asignar = 0;
 
         $comite_de_acta = $this->comites_de_actas($acuerdos);
-        $alcance        = Alcance::get_instance();
 
         foreach ($acuerdos as $acuerdo) {
-            $por_estatus[Estatus::de($acuerdo->ID, $hoy)]++;
+            $estatus = Estatus::de($acuerdo->ID, $hoy);
+            $por_estatus[$estatus]++;
+
+            if ((int) $acuerdo->post_author === $yo) {
+                $mios[$estatus]++;
+                $total_mios++;
+            }
 
             $comite_id = isset($comite_de_acta[(int) $acuerdo->post_parent]) ? $comite_de_acta[(int) $acuerdo->post_parent] : 0;
             if ($comite_id) {
                 $por_comite[$comite_id] = (isset($por_comite[$comite_id]) ? $por_comite[$comite_id] : 0) + 1;
             }
 
-            // Misma definición de "sin asignar" que Asignacion::de().
-            $autor = (int) $acuerdo->post_author;
-            if ($alcance->administra($autor) || !get_userdata($autor)) {
+            if ($this->sin_asignar($acuerdo, $alcance)) {
                 $sin_asignar++;
             } else {
+                $autor               = (int) $acuerdo->post_author;
                 $por_persona[$autor] = (isset($por_persona[$autor]) ? $por_persona[$autor] : 0) + 1;
             }
         }
 
-        $ninguno = $filtro['estatus'] === '' && !$filtro['comite'] && $filtro['asignado'] === '' && $filtro['busqueda'] === '';
+        $sin_otros = !$filtro['comite'] && !$filtro['acta'] && $filtro['asignado'] === '' && $filtro['busqueda'] === '';
 
-        $secciones = [[
-            'titulo' => __('Acuerdos por Estatus', 'egc'),
-            'items'  => array_merge(
-                [[
-                    'label'  => __('Todos', 'egc'),
-                    'count'  => count($acuerdos),
-                    'url'    => $base,
-                    'activo' => $ninguno,
-                ]],
-                $this->items_estatus($base, $filtro, $por_estatus)
-            ),
-        ]];
+        // "Todos" va al final: lo primero que se ofrece es lo que pide acción.
+        if ($alcance->administra($yo)) {
+            $items = $this->items_estatus($base, $por_estatus, $filtro['estatus'] !== '' && $sin_otros && !$filtro['mios'], $filtro['estatus']);
+            $items[] = [
+                'label'  => __('Todos', 'egc'),
+                'count'  => count($acuerdos),
+                'url'    => $this->url_todos($base),
+                'activo' => $filtro['todos'] && $filtro['estatus'] === '' && $sin_otros && !$filtro['mios'],
+            ];
+
+            $secciones = [['titulo' => __('Acuerdos por Estatus', 'egc'), 'items' => $items]];
+        } else {
+            $items = $this->items_estatus($this->url_todos($base), $mios, $filtro['mios'], $filtro['estatus']);
+            $items[] = [
+                'label'  => __('Todos', 'egc'),
+                'count'  => $total_mios,
+                'url'    => $this->url_todos($base),
+                'activo' => $filtro['mios'] && $filtro['estatus'] === '',
+            ];
+
+            $secciones = [['titulo' => __('Mis acuerdos por estatus', 'egc'), 'items' => $items]];
+        }
 
         $items_comite = [];
         foreach ($por_comite as $id => $cantidad) {
@@ -216,7 +470,7 @@ class Listado
                 'label'  => Comite::nombre($id),
                 'count'  => $cantidad,
                 'url'    => add_query_arg(Consulta::VAR_COMITE, $id, $base),
-                'activo' => $filtro['comite'] === $id && $filtro['estatus'] === '',
+                'activo' => $filtro['comite'] === $id && !$filtro['mios'],
             ];
         }
         $this->ordenar($items_comite);
@@ -228,7 +482,7 @@ class Listado
                 'label'  => get_userdata($id)->display_name,
                 'count'  => $cantidad,
                 'url'    => add_query_arg(Consulta::VAR_ASIGNADO, $id, $base),
-                'activo' => $filtro['asignado'] === (string) $id && $filtro['estatus'] === '' && !$filtro['comite'],
+                'activo' => $filtro['asignado'] === (string) $id && !$filtro['comite'],
             ];
         }
         $this->ordenar($items_persona);
@@ -237,7 +491,7 @@ class Listado
                 'label'  => __('Sin asignar', 'egc'),
                 'count'  => $sin_asignar,
                 'url'    => add_query_arg(Consulta::VAR_ASIGNADO, Consulta::SIN_ASIGNAR, $base),
-                'activo' => $filtro['asignado'] === Consulta::SIN_ASIGNAR && $filtro['estatus'] === '' && !$filtro['comite'],
+                'activo' => $filtro['asignado'] === Consulta::SIN_ASIGNAR && !$filtro['comite'],
             ];
         }
         $this->agregar_seccion($secciones, __('Acuerdos asignados a', 'egc'), $items_persona);
@@ -245,7 +499,12 @@ class Listado
         return $secciones;
     }
 
-    private function items_estatus($base, array $filtro, array $cuentas)
+    /**
+     * @param string $base   URL a la que se le agrega el estatus.
+     * @param array  $cuentas slug => cantidad.
+     * @param bool   $en_esta_vista Si el filtro activo es de esta sección (si no, ningún estatus se marca).
+     */
+    private function items_estatus($base, array $cuentas, $en_esta_vista, $estatus_activo)
     {
         $items = [];
 
@@ -254,7 +513,7 @@ class Listado
                 'label'  => $etiqueta,
                 'count'  => $cuentas[$slug],
                 'url'    => add_query_arg(Consulta::VAR_ESTATUS, $slug, $base),
-                'activo' => $filtro['estatus'] === $slug,
+                'activo' => $en_esta_vista && $estatus_activo === $slug,
             ];
         }
 
@@ -355,6 +614,7 @@ class Listado
             'asignado'       => $this->asignado($id),
             'extracto'       => wp_trim_words(wp_strip_all_tags($acuerdo->post_content), 50),
             'acciones'       => $this->acciones($id),
+            'ejecutar'       => $this->ejecutar($id),
         ];
     }
 
@@ -397,6 +657,32 @@ class Listado
     }
 
     /**
+     * Datos del botón "Marcar ejecutado", o null si el usuario no puede
+     * (solo administradores — ver AcuerdoManagement::puede_ejecutar) o
+     * el acuerdo ya está ejecutado: la vista no pinta nada.
+     *
+     * Vuelve a la misma pantalla (con sus filtros y página): marcar un
+     * acuerdo no debe sacar al usuario de donde estaba.
+     *
+     * @return array{id:int,action:string,nonce_name:string,redirect_to:string}|null
+     */
+    private function ejecutar($acuerdo_id)
+    {
+        $management = AcuerdoManagement::get_instance();
+
+        if (!$management->puede_ejecutar($acuerdo_id)) {
+            return null;
+        }
+
+        return [
+            'id'          => (int) $acuerdo_id,
+            'action'      => AcuerdoManagement::ACTION_EJECUTAR,
+            'nonce_name'  => AcuerdoManagement::NONCE_NAME,
+            'redirect_to' => home_url(add_query_arg(null, null)),
+        ];
+    }
+
+    /**
      * @return array{texto:string,vencido:bool}
      */
     private function plazo($estatus, $compromiso, $ejecucion, $hoy)
@@ -434,11 +720,6 @@ class Listado
 
         if ($asignado['tipo'] === 'usuario') {
             return $asignado['nombre'];
-        }
-
-        if ($asignado['tipo'] === 'pendiente') {
-            /* translators: %s: correo de la persona */
-            return sprintf(__('%s (pendiente de registro)', 'egc'), $asignado['email']);
         }
 
         return __('Sin asignar', 'egc');

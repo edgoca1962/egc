@@ -37,9 +37,10 @@ if (!defined('ABSPATH')) {
  *   proceso / ejecutado) NO se guarda: se calcula a partir de estas
  *   dos fechas, así no hace falta ningún proceso diario que lo
  *   actualice ni puede quedar desfasado.
- * - `_asignado_email`: correo de un asignado que todavía no tiene
- *   usuario; mientras esté, el autor sigue siendo el administrador. Al
- *   activarse esa cuenta se completa la asignación (paso 5).
+ *
+ * Slug (`post_name`): lo genera el Core (PostSlugs) al crear el
+ * registro — `acuerdo_` + 10 caracteres al azar — igual que para
+ * cualquier CPT propio. Este módulo no lo toca.
  *
  * VISIBILIDAD: es el ÚNICO recurso del módulo con front-end (listado
  * `/acuerdo/` y detalle `/acuerdo/<slug>/`); comité, acta, miembro y
@@ -66,7 +67,6 @@ class Acuerdo
     const META_NUMERO           = '_numero';
     const META_FECHA_COMPROMISO = '_fecha_compromiso';
     const META_FECHA_EJECUCION  = '_fecha_ejecucion';
-    const META_ASIGNADO_EMAIL   = '_asignado_email';
 
     /**
      * Variable de consulta INTERNA (no está en la lista de variables
@@ -158,15 +158,6 @@ class Acuerdo
                 'auth_callback'     => $auth_callback,
             ]);
         }
-
-        register_post_meta(self::POST_TYPE, self::META_ASIGNADO_EMAIL, [
-            'type'              => 'string',
-            'single'            => true,
-            'default'           => '',
-            'show_in_rest'      => false,
-            'sanitize_callback' => 'sanitize_email',
-            'auth_callback'     => $auth_callback,
-        ]);
     }
 
     /**

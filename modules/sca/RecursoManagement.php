@@ -335,7 +335,11 @@ abstract class RecursoManagement
             $this->redirigir(add_query_arg('error', 'forbidden', $this->destino()));
         }
 
-        wp_trash_post($post_id);
+        // Falso si algo lo impide; en particular Cascada cancela la
+        // eliminación completa si no se puede con alguno de los hijos.
+        if (!wp_trash_post($post_id)) {
+            $this->redirigir(add_query_arg('error', 'forbidden', $this->destino()));
+        }
 
         $this->volver_con_ok([]);
     }
@@ -465,7 +469,7 @@ abstract class RecursoManagement
         exit;
     }
 
-    private function destino()
+    protected function destino()
     {
         $pedido = isset($_POST['redirect_to']) ? wp_unslash($_POST['redirect_to']) : '';
 
