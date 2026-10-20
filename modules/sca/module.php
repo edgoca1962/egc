@@ -35,7 +35,7 @@ if (!defined('ABSPATH')) {
  * Orden: primero los cinco recursos y sus metas; después los servicios
  * de reglas (alcance, sincronización de títulos y fechas, consultas
  * de acuerdos, asignación, comentarios y su aviso por correo); luego el CRUD del
- * administrador y, al final, las entradas de navegación (menú del
+ * administrador, la página Principal y, al final, las entradas de navegación (menú del
  * avatar y aterrizaje tras el login). Listado (puente de las vistas)
  * no se instancia acá: lo pide la vista cuando la necesita.
  */
@@ -61,4 +61,5 @@ MiembroManagement::get_instance();
 ActaManagement::get_instance();
 AcuerdoManagement::get_instance();
 Administracion::get_instance();
+Principal::get_instance();
 Navegacion::get_instance();

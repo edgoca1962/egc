@@ -93,9 +93,7 @@ class Alcance
 
     /**
      * @return bool Si el usuario administra los acuerdos (editor del
-     *              módulo, administrador general o superusuario). Es la
-     *              misma pregunta que responde "¿se le pueden asignar
-     *              acuerdos?" — la respuesta es no.
+     *              módulo, administrador general o superusuario).
      *
      * Se apoya en capacidades, nunca en nombres de rol; la capacidad se
      * lee del post type registrado y no se reconstruye a mano (ver
@@ -118,10 +116,13 @@ class Alcance
     }
 
     /**
-     * @return bool Si el usuario está enrolado en el módulo: tiene el
-     *              rol lector de SCA (el que da el Administrador
-     *              General). Los administradores no lo necesitan: su
-     *              acceso viene de sus capacidades (ver administra()).
+     * @return bool Si el usuario está enrolado en el módulo: tiene un
+     *              rol de SCA, lector o Editor (los da el Administrador
+     *              General). Quien administra por capacidades (el
+     *              superusuario, el Administrador General) no lo
+     *              necesita para ver: su acceso viene de ellas (ver
+     *              administra()); el rol solo hace falta para que se le
+     *              puedan asignar acuerdos.
      *
      * Es la ÚNICA definición de "enrolado": la usa la puerta de de()
      * y la regla de asignación (Asignacion), para que quien puede ver
@@ -131,13 +132,12 @@ class Alcance
     {
         $usuario = (int) $user_id > 0 ? get_userdata((int) $user_id) : false;
 
-        return $usuario && in_array(Asignacion::ROL_LECTOR, (array) $usuario->roles, true);
+        return $usuario && array_intersect([Asignacion::ROL_LECTOR, Asignacion::ROL_EDITOR], (array) $usuario->roles) !== [];
     }
 
     /**
-     * @return int[] Usuarios que administran el módulo. Un acuerdo cuyo
-     *               autor está en esta lista es un acuerdo "sin asignar"
-     *               (consulta nativa: get_users con capacidad).
+     * @return int[] Usuarios que administran el módulo (consulta nativa:
+     *               get_users con capacidad).
      */
     public function administradores()
     {

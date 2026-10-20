@@ -31,8 +31,10 @@ if (!defined('ABSPATH')) {
  *
  *  1. Coordinadores del comité del acuerdo (Miembro::coordinadores).
  *  2. Administradores del módulo: los usuarios con el rol Editor de SCA.
- *     EXCEPTO cuando el dueño del acuerdo es un administrador (acuerdo
- *     sin asignar): en ese caso el aviso va solo al coordinador.
+ *     EXCEPTO cuando el acuerdo está sin asignar: en ese caso el aviso
+ *     va solo al coordinador. Un acuerdo asignado a un administrador
+ *     cuenta como asignado: el aviso llega a todos los administradores
+ *     (el dueño incluido, sin duplicarse).
  *  3. El dueño del acuerdo, cuando el comentario lo escribió otra
  *     persona (la respuesta del administrador): así sabe que su
  *     solicitud fue atendida sin tener que volver a abrir el acuerdo.
@@ -122,17 +124,14 @@ class AvisoComentario
      */
     public function destinatarios($acuerdo, $autor_id)
     {
-        $alcance = Alcance::get_instance();
-        $dueno   = Asignacion::get_instance()->de($acuerdo->ID);
+        $dueno = Asignacion::get_instance()->de($acuerdo->ID);
 
         $ids = Miembro::coordinadores(Acuerdo::comite_id($acuerdo->ID));
 
-        // Dueño administrador = acuerdo sin asignar: el aviso es solo para el coordinador.
-        if (!$alcance->administra((int) $acuerdo->post_author)) {
-            $ids = array_merge($ids, $this->administradores());
-        }
-
+        // Acuerdo sin asignar: el aviso es solo para el coordinador. Asignado
+        // (también si es a un administrador): además, los administradores y el dueño.
         if ($dueno['tipo'] === 'usuario') {
+            $ids = array_merge($ids, $this->administradores());
             $ids[] = $dueno['user_id'];
         }
 

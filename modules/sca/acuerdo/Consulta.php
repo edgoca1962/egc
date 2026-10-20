@@ -43,8 +43,8 @@ if (!defined('ABSPATH')) {
  *                       nada. Como todo filtro, solo estrecha: el alcance
  *                       del usuario se aplica después.
  *       sca_asignado  → author (el asignado es el post_author); el
- *                       valor `sin` → author__in = quienes administran
- *                       el módulo (acuerdos sin asignar)
+ *                       valor `sin` → author__in = [0] (los acuerdos sin
+ *                       asignar son los que no tienen autor)
  *       sca_mios      → los asignados a quien consulta (author__in =
  *                       el usuario actual); lo usa la barra lateral
  *                       para "Mis acuerdos por estatus"
@@ -374,7 +374,7 @@ class Consulta
 
         $asignado = $query->get(self::VAR_ASIGNADO);
         if ($asignado === self::SIN_ASIGNAR) {
-            $query->set('author__in', Alcance::get_instance()->administradores() ?: [0]);
+            $query->set('author__in', [0]);
         } elseif (absint($asignado)) {
             $query->set('author', absint($asignado));
         }

@@ -310,7 +310,7 @@ abstract class RecursoManagement
         if ($post_id) {
             $resultado = wp_update_post(wp_slash($campos + ['ID' => $post_id]), true);
         } else {
-            $resultado = wp_insert_post(wp_slash($campos + ['post_author' => get_current_user_id()]), true);
+            $resultado = wp_insert_post(wp_slash($campos + ['post_author' => $this->autor_inicial()]), true);
         }
 
         if (is_wp_error($resultado) || !$resultado) {
@@ -400,6 +400,18 @@ abstract class RecursoManagement
         $fecha = Fecha::sanitizar($crudo);
 
         return $fecha === '' ? false : $fecha;
+    }
+
+    /**
+     * Autor con el que se crea el recurso: por omisión, quien lo
+     * registra. Un recurso cuyo autor significa algo más (el asignado de
+     * un acuerdo) lo redefine.
+     *
+     * @return int
+     */
+    protected function autor_inicial()
+    {
+        return get_current_user_id();
     }
 
     /** @return array<int,string> id => nombre de los comités publicados. */

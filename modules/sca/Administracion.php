@@ -608,12 +608,11 @@ class Administracion
             $cuentas[$autor] = ($cuentas[$autor] ?? 0) + 1;
         }
 
-        $alcance  = Alcance::get_instance();
         $opciones = [];
 
         foreach ($cuentas as $user_id => $cantidad) {
             $usuario = get_userdata($user_id);
-            if ($usuario && !$alcance->administra($user_id)) {
+            if ($usuario) {
                 $opciones[$user_id] = sprintf(
                     /* translators: 1: nombre, 2: correo, 3: cantidad de acuerdos */
                     _n('%1$s (%2$s) — %3$d acuerdo', '%1$s (%2$s) — %3$d acuerdos', $cantidad, 'egc'),

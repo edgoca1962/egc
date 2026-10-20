@@ -31,6 +31,8 @@ if (!defined('ABSPATH')) {
  * Comité" y "Acuerdos asignados a", cada uno con su cantidad.
  *  - Estatus: quien administra el módulo ve los de todo su alcance; los
  *    demás ven "Mis acuerdos por estatus" (solo los asignados a ellos).
+ *    Como el administrador también puede tener acuerdos asignados, si
+ *    los tiene ve además "Mis acuerdos por estatus" debajo de la suya.
  *  - Comité y persona: llevan a un SEGUNDO NIVEL (un comité o una
  *    persona elegidos, sin estatus): el listado no muestra acuerdos y
  *    ofrece los estatus de ese comité/persona, dentro del alcance del
@@ -278,7 +280,7 @@ class Listado
             return [
                 'texto'     => __('No cuenta con Acuerdos Vencidos.', 'egc'),
                 'tipo'      => 'success',
-                'todos_url' => $this->url_todos($base),
+                'todos_url' => $filtro['mios'] ? add_query_arg(Consulta::VAR_MIOS, 1, $base) : $this->url_todos($base),
             ];
         }
 
@@ -353,7 +355,6 @@ class Listado
     {
         $acuerdos       = $this->acuerdos_visibles();
         $comite_de_acta = $filtro['comite'] ? $this->comites_de_actas($acuerdos) : [];
-        $alcance        = Alcance::get_instance();
         $out            = [];
 
         foreach ($acuerdos as $acuerdo) {
@@ -362,7 +363,7 @@ class Listado
             }
 
             if ($filtro['asignado'] === Consulta::SIN_ASIGNAR) {
-                if (!$this->sin_asignar($acuerdo, $alcance)) {
+                if (!$this->sin_asignar($acuerdo)) {
                     continue;
                 }
             } elseif ($filtro['asignado'] !== '' && (int) $acuerdo->post_author !== (int) $filtro['asignado']) {
@@ -376,14 +377,13 @@ class Listado
     }
 
     /**
-     * Misma definición de "sin asignar" que Asignacion::de(): el autor
-     * administra el módulo o ya no existe.
+     * "Sin asignar" es no tener autor (`post_author` = 0), la misma
+     * condición que usa Consulta para el filtro `sin`: contador y lista
+     * no pueden discrepar.
      */
-    private function sin_asignar($acuerdo, Alcance $alcance)
+    private function sin_asignar($acuerdo)
     {
-        $autor = (int) $acuerdo->post_author;
-
-        return $alcance->administra($autor) || !get_userdata($autor);
+        return (int) $acuerdo->post_author <= 0;
     }
 
     // ------------------------------------------------------------------
@@ -431,9 +431,9 @@ class Listado
                 $por_comite[$comite_id] = (isset($por_comite[$comite_id]) ? $por_comite[$comite_id] : 0) + 1;
             }
 
-            if ($this->sin_asignar($acuerdo, $alcance)) {
+            if ($this->sin_asignar($acuerdo)) {
                 $sin_asignar++;
-            } else {
+            } elseif (get_userdata((int) $acuerdo->post_author)) {
                 $autor               = (int) $acuerdo->post_author;
                 $por_persona[$autor] = (isset($por_persona[$autor]) ? $por_persona[$autor] : 0) + 1;
             }
@@ -442,6 +442,8 @@ class Listado
         $sin_otros = !$filtro['comite'] && !$filtro['acta'] && $filtro['asignado'] === '' && $filtro['busqueda'] === '';
 
         // "Todos" va al final: lo primero que se ofrece es lo que pide acción.
+        $secciones = [];
+
         if ($alcance->administra($yo)) {
             $items = $this->items_estatus($base, $por_estatus, $filtro['estatus'] !== '' && $sin_otros && !$filtro['mios'], $filtro['estatus']);
             $items[] = [
@@ -451,17 +453,22 @@ class Listado
                 'activo' => $filtro['todos'] && $filtro['estatus'] === '' && $sin_otros && !$filtro['mios'],
             ];
 
-            $secciones = [['titulo' => __('Acuerdos por Estatus', 'egc'), 'items' => $items]];
-        } else {
-            $items = $this->items_estatus($this->url_todos($base), $mios, $filtro['mios'], $filtro['estatus']);
+            $secciones[] = ['titulo' => __('Acuerdos por Estatus', 'egc'), 'items' => $items];
+        }
+
+        // Los demás siempre tienen "Mis acuerdos"; el administrador solo si
+        // tiene alguno asignado (si no, la sección sería una fila de ceros).
+        if ($total_mios > 0 || !$alcance->administra($yo)) {
+            $propios = add_query_arg(Consulta::VAR_MIOS, 1, $base);
+            $items   = $this->items_estatus($propios, $mios, $filtro['mios'], $filtro['estatus']);
             $items[] = [
                 'label'  => __('Todos', 'egc'),
                 'count'  => $total_mios,
-                'url'    => $this->url_todos($base),
+                'url'    => $propios,
                 'activo' => $filtro['mios'] && $filtro['estatus'] === '',
             ];
 
-            $secciones = [['titulo' => __('Mis acuerdos por estatus', 'egc'), 'items' => $items]];
+            $secciones[] = ['titulo' => __('Mis acuerdos por estatus', 'egc'), 'items' => $items];
         }
 
         $items_comite = [];

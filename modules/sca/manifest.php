@@ -31,9 +31,9 @@ if (!defined('ABSPATH')) {
  * - `sca_editor` es el administrador del módulo: todas las capacidades
  *   de los cinco recursos, "others" incluidas. Es el único que crea,
  *   edita, borra y marca como ejecutado (junto con el superusuario de
- *   WordPress, que entra por `manage_options`). No se le asignan
- *   acuerdos: un acuerdo cuyo autor administra acuerdos es, por
- *   definición, un acuerdo sin asignar.
+ *   WordPress, que entra por `manage_options`). También se le pueden
+ *   asignar acuerdos, como a cualquier persona enrolada: un acuerdo sin
+ *   asignar es el que no tiene autor (`post_author` = 0).
  * - `sca_lector` es el rol de todos los demás usuarios: solo `read`.
  *   Sin ninguna capacidad `edit_*` ni `delete_*`, así que WordPress
  *   mismo les niega cualquier escritura y la vista no muestra

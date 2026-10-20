@@ -18,11 +18,10 @@ if (!defined('ABSPATH')) {
  *   su acta: dos saltos, sin copiarlo a una meta que pudiera quedar
  *   desincronizada).
  * - Fecha de la reunión: `post_date` nativo, heredada del acta (paso 3).
- * - Asignado: `post_author` nativo. Mientras el acuerdo no está
- *   asignado el autor es quien lo registró (el administrador del
- *   módulo); al asignarlo pasa a ser el asignado. A quien administra
- *   acuerdos no se le asignan acuerdos, así que "autor con capacidad de
- *   administrar" equivale a "sin asignar".
+ * - Asignado: `post_author` nativo. Un acuerdo sin asignar no tiene
+ *   autor (`post_author` = 0); al asignarlo pasa a ser el asignado, que
+ *   puede ser cualquier persona enrolada en el módulo, el administrador
+ *   (Editor de SCA) incluido.
  * - Comentarios: `supports => comments`, flujo nativo de
  *   comment_form() hacia wp-comments-post.php, sin handlers propios.
  *

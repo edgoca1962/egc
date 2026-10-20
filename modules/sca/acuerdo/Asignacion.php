@@ -15,10 +15,14 @@ if (!defined('ABSPATH')) {
  * Capa Lógica — a quién está asignado un acuerdo (módulo SCA).
  *
  * Mapeo a lo nativo: el asignado ES el `post_author` del acuerdo. Un
- * acuerdo "sin asignar" es uno cuyo autor administra el módulo (el
- * editor que lo registró): a quien administra no se le asignan
- * acuerdos, así que la pregunta se responde con la misma capacidad que
- * usa el alcance, sin una bandera aparte que pudiera desincronizarse.
+ * acuerdo "sin asignar" es uno SIN autor (`post_author` = 0, o un
+ * usuario que ya no existe): se guarda con la columna nativa, sin una
+ * bandera aparte que pudiera desincronizarse. Antes "sin asignar"
+ * significaba "autor administrador" porque a quien administra no se le
+ * asignaban acuerdos; desde que el administrador del módulo (Editor de
+ * SCA) también puede recibirlos, el autor ya no sirve para distinguirlo
+ * y el acuerdo sin asignar pasa a ser el que no tiene autor. Los datos
+ * anteriores se convierten una sola vez (migrar_sin_asignar()).
  *
  * REGLA: solo se asigna a quien ya está enrolado, y asignar no da
  * acceso a nadie. "Enrolado" son tres cosas a la vez, y las tres tienen
@@ -27,10 +31,11 @@ if (!defined('ABSPATH')) {
  *  1. Tiene cuenta.
  *  2. La cuenta está Activa (el estado lo cambia el Administrador
  *     General desde Gestión de usuarios).
- *  3. Ya tiene el rol lector de SCA (lo da el Administrador General o
- *     el superusuario, también desde Gestión de usuarios). La definición
- *     vive en Alcance::enrolado(), que además es la puerta de la
- *     visibilidad: sin ese rol no se ve ningún acuerdo.
+ *  3. Ya tiene un rol de SCA: lector o Editor (administrador del
+ *     módulo). Lo da el Administrador General o el superusuario, también
+ *     desde Gestión de usuarios. La definición vive en
+ *     Alcance::enrolado(), que además es la puerta de la visibilidad:
+ *     sin ese rol no se ve ningún acuerdo.
  *
  * Esta clase nunca crea cuentas, nunca manda invitaciones y nunca
  * agrega roles: el acceso al módulo lo concede una persona, en un
@@ -42,7 +47,7 @@ if (!defined('ABSPATH')) {
  *
  * Esta clase NO verifica permisos del usuario actual: eso es del
  * handler (paso 6), que revalida capacidades y nonce antes de llamarla.
- * Acá se validan los DATOS (existe, no es administrador, está enrolado).
+ * Acá se validan los DATOS (existe, está activo, está enrolado).
  *
  * Reasignación masiva (reasignar_todos): cuando cambia la persona de un
  * puesto (el Tesorero nuevo), TODOS los acuerdos del anterior pasan al
@@ -71,15 +76,19 @@ class Asignacion
     const OK                = 'ok';
     const ERR_ACUERDO       = 'acuerdo_invalido';
     const ERR_USUARIO       = 'usuario_invalido';
-    const ERR_ADMINISTRADOR = 'es_administrador';
     const ERR_NO_ACTIVO     = 'usuario_no_activo';  // pendiente o rechazado
     const ERR_SIN_ACCESO    = 'sin_acceso_sca';     // activo, pero sin rol en el módulo
     const ERR_MISMO_USUARIO = 'mismo_usuario';
-    const ERR_SIN_ADMIN     = 'sin_administrador';
+
+    /** Versión de la conversión de "sin asignar" (ver migrar_sin_asignar()). */
+    const OPCION_MIGRACION  = 'egc_sca_sin_asignar_v';
+    const VERSION_MIGRACION = '1';
+    const LOTE_MIGRACION    = 50;
 
     private function __construct()
     {
         add_action('egc_user_status_changed', [$this, 'enlazar_membresias'], 10, 3);
+        add_action('init', [$this, 'migrar_sin_asignar'], 30);
     }
 
     /**
@@ -94,7 +103,7 @@ class Asignacion
         $acuerdo = get_post($acuerdo_id);
         $usuario = $acuerdo ? get_userdata((int) $acuerdo->post_author) : false;
 
-        if (!$usuario || Alcance::get_instance()->administra($usuario->ID)) {
+        if (!$usuario) {
             return ['tipo' => 'ninguno', 'user_id' => 0, 'nombre' => '', 'email' => ''];
         }
 
@@ -119,8 +128,7 @@ class Asignacion
     }
 
     /**
-     * Vuelve a "sin asignar": el autor pasa al administrador que
-     * ejecuta la acción.
+     * Vuelve a "sin asignar": el acuerdo queda sin autor (0).
      *
      * @return string
      */
@@ -130,12 +138,49 @@ class Asignacion
             return self::ERR_ACUERDO;
         }
 
-        $admin_id = $this->administrador_actual();
-        if (!$admin_id) {
-            return self::ERR_SIN_ADMIN;
+        return $this->poner_autor($acuerdo_id, 0);
+    }
+
+    /**
+     * Conversión ÚNICA de los datos anteriores: cuando "sin asignar" era
+     * "autor administrador", todo acuerdo cuyo autor administra el
+     * módulo era un acuerdo sin asignar. Ahora esos acuerdos pasan a no
+     * tener autor; si no, quedarían a nombre del administrador que los
+     * registró.
+     *
+     * Corre en lotes (cada petición convierte hasta LOTE_MIGRACION con
+     * wp_update_post, que dispara los hooks) hasta que no queda ninguno;
+     * recién entonces se anota la versión. Importa el orden: tiene que
+     * terminar ANTES de que se asigne algún acuerdo a un administrador,
+     * porque después ya no se puede distinguir cuál era cuál. Como el
+     * código nuevo es el único que permite esa asignación y esto corre en
+     * `init`, se completa en las primeras peticiones.
+     */
+    public function migrar_sin_asignar()
+    {
+        if (get_option(self::OPCION_MIGRACION) === self::VERSION_MIGRACION) {
+            return;
         }
 
-        return $this->poner_autor($acuerdo_id, $admin_id);
+        $administradores = Alcance::get_instance()->administradores();
+        $ids             = $administradores ? get_posts([
+            'post_type'          => Acuerdo::POST_TYPE,
+            'post_status'        => ['publish', 'future', 'draft', 'pending', 'private', 'trash'],
+            'author__in'         => $administradores,
+            'posts_per_page'     => self::LOTE_MIGRACION,
+            'fields'             => 'ids',
+            'no_found_rows'      => true,
+            'suppress_filters'   => true,
+            Acuerdo::SIN_ALCANCE => true,
+        ]) : [];
+
+        foreach ($ids as $acuerdo_id) {
+            $this->poner_autor($acuerdo_id, 0);
+        }
+
+        if (count($ids) < self::LOTE_MIGRACION) {
+            update_option(self::OPCION_MIGRACION, self::VERSION_MIGRACION);
+        }
     }
 
     /**
@@ -211,30 +256,27 @@ class Asignacion
     }
 
     /**
-     * Personas a las que se puede asignar un acuerdo: las enrolladas
-     * (cuenta Activa + rol lector de SCA) que no administran el módulo.
-     * Es la misma lista que valida asignar_a_usuario(): lo que el
-     * formulario ofrece y lo que el servidor acepta no pueden diferir.
+     * Personas a las que se puede asignar un acuerdo: las enroladas
+     * (cuenta Activa + rol de SCA, lector o Editor). Es la misma lista
+     * que valida asignar_a_usuario(): lo que el formulario ofrece y lo
+     * que el servidor acepta no pueden diferir.
      *
      * @return array<int,string> id => "Nombre (correo)", por orden alfabético.
      */
     public function usuarios_asignables()
     {
         $usuarios = get_users([
-            'role'       => self::ROL_LECTOR,
+            'role__in'   => [self::ROL_LECTOR, self::ROL_EDITOR],
             'meta_key'   => UserStatus::META_KEY,
             'meta_value' => UserStatus::ACTIVO,
             'orderby'    => 'display_name',
             'order'      => 'ASC',
         ]);
 
-        $alcance  = Alcance::get_instance();
         $opciones = [];
 
         foreach ($usuarios as $usuario) {
-            if (!$alcance->administra($usuario->ID)) {
-                $opciones[(int) $usuario->ID] = sprintf('%s (%s)', $usuario->display_name, $usuario->user_email);
-            }
+            $opciones[(int) $usuario->ID] = sprintf('%s (%s)', $usuario->display_name, $usuario->user_email);
         }
 
         return $opciones;
@@ -291,10 +333,6 @@ class Asignacion
             return self::ERR_USUARIO;
         }
 
-        if (Alcance::get_instance()->administra($usuario->ID)) {
-            return self::ERR_ADMINISTRADOR;
-        }
-
         if (UserStatus::get_instance()->get_status($usuario->ID) !== UserStatus::ACTIVO) {
             return self::ERR_NO_ACTIVO;
         }
@@ -304,17 +342,6 @@ class Asignacion
         }
 
         return self::OK;
-    }
-
-    /**
-     * El usuario actual si administra el módulo (es quien ejecuta la
-     * acción); 0 si no (nadie con permiso para soltar un acuerdo).
-     */
-    private function administrador_actual()
-    {
-        $actual = get_current_user_id();
-
-        return ($actual && Alcance::get_instance()->administra($actual)) ? $actual : 0;
     }
 
     /**

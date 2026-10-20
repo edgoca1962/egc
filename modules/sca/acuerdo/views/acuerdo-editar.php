@@ -75,7 +75,7 @@ $v = $state['valores'];
                         </div>
                     </div>
                     <p class="form-text mb-0">
-                        <?php esc_html_e('Solo aparecen personas con cuenta activa y acceso al módulo. Si falta alguien, el Administrador General debe darle acceso primero desde Gestión de usuarios. Para quitar la asignación, elegí «Sin asignar».', 'egc'); ?>
+                        <?php esc_html_e('Solo aparecen personas con cuenta activa y acceso al módulo (incluye a quienes administran el módulo). Si falta alguien, el Administrador General debe darle acceso primero desde Gestión de usuarios. Para quitar la asignación, elegí «Sin asignar».', 'egc'); ?>
                     </p>
                 </fieldset>
 

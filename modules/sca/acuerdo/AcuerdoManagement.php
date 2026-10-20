@@ -28,9 +28,11 @@ if (!defined('ABSPATH')) {
  *    el camino para corregir la fecha; el camino normal es el botón
  *    "Marcar ejecutado" (handle_ejecutar), que pone la de hoy.
  *  - Asignado: un usuario ya enrolado en el módulo (cuenta activa y
- *    acceso a SCA). Asignacion valida la regla; este formulario solo
- *    ofrece a quienes la cumplen. No se asigna a correos sin cuenta ni
- *    se da acceso a nadie.
+ *    rol de SCA, lector o Editor: el administrador del módulo también
+ *    puede recibir acuerdos). Asignacion valida la regla; este
+ *    formulario solo ofrece a quienes la cumplen. No se asigna a
+ *    correos sin cuenta ni se da acceso a nadie. «Sin asignar» guarda
+ *    el acuerdo sin autor (ver autor_inicial()).
  *
  * Qué cambió respecto de lo que el formulario manda, en cada
  * guardado, se decide comparando con el estado ACTUAL: así volver a
@@ -41,8 +43,8 @@ if (!defined('ABSPATH')) {
  * podría comentar.
  *
  * Si el acuerdo se guardó pero la asignación fue rechazada (p. ej. se
- * eligió a quien administra el módulo) se vuelve con el aviso de ambas
- * cosas: el texto del acuerdo no se pierde.
+ * eligió a alguien cuya cuenta ya no está activa) se vuelve con el aviso
+ * de ambas cosas: el texto del acuerdo no se pierde.
  */
 class AcuerdoManagement extends RecursoManagement
 {
@@ -66,6 +68,17 @@ class AcuerdoManagement extends RecursoManagement
     protected function slug_editar()
     {
         return 'acuerdo-editar';
+    }
+
+    /**
+     * Un acuerdo nuevo nace SIN autor (sin asignar), no a nombre de quien
+     * lo registra: ahora que el administrador también puede recibir
+     * acuerdos, el autor tiene que ser siempre una asignación explícita.
+     * Si el formulario eligió a alguien, despues_de_guardar() lo asigna.
+     */
+    protected function autor_inicial()
+    {
+        return 0;
     }
 
     protected function titulo_pagina()
@@ -119,11 +132,9 @@ class AcuerdoManagement extends RecursoManagement
         return [
             Asignacion::ERR_ACUERDO       => __('El acuerdo no existe.', 'egc'),
             Asignacion::ERR_USUARIO       => __('El usuario indicado no existe.', 'egc'),
-            Asignacion::ERR_ADMINISTRADOR => __('A quien administra el módulo no se le pueden asignar acuerdos.', 'egc'),
             Asignacion::ERR_NO_ACTIVO     => __('Esa persona no tiene una cuenta activa, así que no se le puede asignar.', 'egc'),
             Asignacion::ERR_SIN_ACCESO    => __('Esa persona todavía no tiene acceso al módulo. El acceso lo da el Administrador General desde Gestión de usuarios; después se le puede asignar.', 'egc'),
             Asignacion::ERR_MISMO_USUARIO => __('El usuario de origen y el de destino son el mismo.', 'egc'),
-            Asignacion::ERR_SIN_ADMIN     => __('Solo quien administra el módulo puede asignar acuerdos.', 'egc'),
         ];
     }
 
